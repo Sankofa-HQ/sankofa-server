@@ -1,0 +1,26 @@
+# Infrastructure Data
+infra/ch_data/
+infra/sankofa_data/
+*.db
+*.db-journal
+*.db-wal
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Build Artifacts
+**/dist/
+**/bin/
+*.exe
+*.test
+*.out
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+
