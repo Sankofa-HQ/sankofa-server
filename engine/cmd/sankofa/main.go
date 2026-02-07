@@ -22,7 +22,7 @@ import (
 	"gorm.io/gorm"
 )
 
-//go:embed dist/*
+//go:embed dist
 var frontend embed.FS
 
 // --- CONFIG ---
