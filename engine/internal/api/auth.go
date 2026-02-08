@@ -272,7 +272,7 @@ func generateJWT(userID uint, email string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"email":   email,
-		"exp":     time.Now().Add(time.Hour * 72).Unix(), // 3 days
+		"exp":     time.Now().Add(time.Hour * 24 * 14).Unix(), // 14 days
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)
