@@ -3,27 +3,33 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"sankofa/engine/internal/database"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
 
 type OrganizationHandler struct {
 	DB *gorm.DB
+	CH driver.Conn
 }
 
-func NewOrganizationHandler(db *gorm.DB) *OrganizationHandler {
-	return &OrganizationHandler{DB: db}
+func NewOrganizationHandler(db *gorm.DB, ch driver.Conn) *OrganizationHandler {
+	return &OrganizationHandler{DB: db, CH: ch}
 }
 
 func (h *OrganizationHandler) RegisterRoutes(router fiber.Router) {
 	// These routes are expected to be under /v1/orgs/:org_id
 	// and protected by RequireAuth + RequireOrgAccess middleware
+	router.Get("/", h.GetOrganization)
+	router.Put("/", h.UpdateOrganization)
+	router.Delete("/", h.DeleteOrganization)
 	router.Post("/projects", h.CreateProject)
 	router.Post("/invite", h.InviteMember)
 	router.Get("/members", h.GetMembers)
@@ -158,15 +164,27 @@ func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
 	return c.JSON(org)
 }
 
-// UpdateOrganization - PUT /api/v1/orgs/:id
-func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
-	orgID, err := strconv.Atoi(c.Params("org_id")) // middleware uses :org_id
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid organization ID"})
+// GetOrganization - GET /api/v1/orgs/:org_id
+func (h *OrganizationHandler) GetOrganization(c *fiber.Ctx) error {
+	orgID, _ := c.Locals("org_id").(uint) // middleware
+
+	var org database.Organization
+	if err := h.DB.First(&org, orgID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
 	}
 
+	return c.JSON(org)
+}
+
+// UpdateOrganization - PUT /api/v1/orgs/:org_id
+func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
+	orgID, _ := c.Locals("org_id").(uint)
+
 	type Request struct {
-		Name string `json:"name"`
+		Name         string `json:"name"`
+		BillingEmail string `json:"billing_email"`
+		CompanySize  string `json:"company_size"`
+		Industry     string `json:"industry"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
@@ -181,12 +199,69 @@ func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
 	if req.Name != "" {
 		org.Name = req.Name
 	}
+	if req.BillingEmail != "" {
+		org.BillingEmail = req.BillingEmail
+	}
+	if req.CompanySize != "" {
+		org.CompanySize = req.CompanySize
+	}
+	if req.Industry != "" {
+		org.Industry = req.Industry
+	}
 
 	if err := h.DB.Save(&org).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update organization"})
 	}
 
 	return c.JSON(org)
+}
+
+// DeleteOrganization - DELETE /api/v1/orgs/:org_id
+func (h *OrganizationHandler) DeleteOrganization(c *fiber.Ctx) error {
+	orgID, _ := c.Locals("org_id").(uint)
+	userID, _ := c.Locals("user_id").(uint)
+
+	// Verify user is Owner
+	var member database.OrganizationMember
+	if err := h.DB.Where("organization_id = ? AND user_id = ?", orgID, userID).First(&member).Error; err != nil {
+		return c.Status(403).JSON(fiber.Map{"error": "Not a member of this organization"})
+	}
+	if member.Role != "Owner" {
+		return c.Status(403).JSON(fiber.Map{"error": "Only owners can delete an organization"})
+	}
+
+	tx := h.DB.Begin()
+
+	// Delete Projects, Teams, Members, Org itself
+	// Note: GORM with proper foreign keys might cascade, but manual cleanup is safer if not configured.
+
+	// 1. Delete Projects (and their members/data if cascaded)
+	if err := tx.Where("organization_id = ?", orgID).Delete(&database.Project{}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete projects"})
+	}
+
+	// 2. Delete Teams
+	if err := tx.Where("organization_id = ?", orgID).Delete(&database.Team{}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete teams"})
+	}
+
+	// 3. Delete Members
+	if err := tx.Where("organization_id = ?", orgID).Delete(&database.OrganizationMember{}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete members"})
+	}
+
+	// 4. Delete Organization
+	if err := tx.Delete(&database.Organization{}, orgID).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete organization"})
+	}
+
+	tx.Commit()
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Organization deleted"})
 }
 
 // Helper to avoid dependency on internal/api packet private func in auth.go if they are different files in same package.
@@ -544,4 +619,75 @@ func (h *OrganizationHandler) AssignTeamProject(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(tp)
+}
+
+// --- Usage & Billing ---
+
+// GetUsage - GET /v1/orgs/:org_id/usage
+func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
+	orgID, _ := c.Locals("org_id").(uint)
+	log.Printf("🔹 GetUsage called for OrgID: %d", orgID)
+
+	// 1. Get Org Plan
+	var org database.Organization
+	if err := h.DB.First(&org, orgID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
+	}
+
+	// 2. Fetch Plan Limits from DB
+	var plan database.Plan
+	if err := h.DB.First(&plan, "name = ?", org.Plan).Error; err != nil {
+		log.Printf("⚠️ Plan '%s' not found, falling back to Free", org.Plan)
+		// Fallback if plan not found - or maybe error?
+		// Let's fallback to Free just in case
+		h.DB.First(&plan, "name = 'Free'")
+	}
+	log.Printf("🔹 Plan Limits: %+v", plan)
+
+	limits := map[string]int64{
+		"events":   plan.EventLimit,
+		"profiles": plan.ProfileLimit,
+		"replays":  plan.ReplayLimit,
+	}
+
+	// 3. Get Usage from ClickHouse
+	var totalEvents uint64
+	var totalProfiles uint64
+
+	// Get all projects for this org
+	var projectIDs []uint
+	h.DB.Model(&database.Project{}).Where("organization_id = ?", orgID).Pluck("id", &projectIDs)
+
+	if len(projectIDs) > 0 && h.CH != nil {
+		for _, pid := range projectIDs {
+			tenantID := strconv.Itoa(int(pid))
+
+			var events uint64
+			if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE tenant_id = ?", tenantID).Scan(&events); err == nil {
+				totalEvents += events
+			}
+
+			var profiles uint64
+			if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM persons WHERE tenant_id = ?", tenantID).Scan(&profiles); err == nil {
+				totalProfiles += profiles
+			}
+		}
+	}
+
+	// Response
+	return c.JSON(fiber.Map{
+		"plan": fiber.Map{
+			"name":   org.Plan,
+			"limits": limits,
+		},
+		"usage": fiber.Map{
+			"events":   totalEvents,
+			"profiles": totalProfiles,
+			"replays":  0, // Mock for now
+		},
+		"period": fiber.Map{
+			"start": time.Now().AddDate(0, 0, -15), // Mock cycle
+			"end":   time.Now().AddDate(0, 0, 15),
+		},
+	})
 }

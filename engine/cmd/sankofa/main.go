@@ -117,10 +117,12 @@ func main() {
 		&database.Team{},
 		&database.TeamMember{},
 		&database.TeamProject{},
+		&database.Plan{}, // Added Plan
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}
 
+	seedDefaultPlans(db) // Seed Plans before Admin
 	seedDefaultSuperAdmin(db)
 
 	// 3. INIT CLICKHOUSE (The Muscle)
@@ -151,12 +153,12 @@ func main() {
 	}))
 
 	apiRouter := app.Group("/api")
-	v1 := app.Group("/v1")
+	v1 := apiRouter.Group("/v1")
 
 	// HANDLERS
 	authHandler := api.NewAuthHandler(db)
 	projectHandler := api.NewProjectHandler(db, chConn)
-	orgHandler := api.NewOrganizationHandler(db) // New
+	orgHandler := api.NewOrganizationHandler(db, chConn) // New
 	middleware := middleware.NewAuthMiddleware(db)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -177,7 +179,8 @@ func main() {
 
 	// Create Project & Invite & Remove -> Need Admin/Owner
 	orgAdmin := orgs.Group("/", middleware.RequireOrgAccess("Admin"))
-	orgAdmin.Put("/", orgHandler.UpdateOrganization) // Update Org Details
+	orgAdmin.Put("/", orgHandler.UpdateOrganization)    // Update Org Details
+	orgAdmin.Delete("/", orgHandler.DeleteOrganization) // Delete Org
 	orgAdmin.Post("/projects", orgHandler.CreateProject)
 	orgAdmin.Post("/invite", orgHandler.InviteMember)
 	orgAdmin.Delete("/members/:user_id", orgHandler.RemoveMember)
@@ -187,6 +190,8 @@ func main() {
 
 	// Read Members -> Needs Member
 	orgMember := orgs.Group("/", middleware.RequireOrgAccess("Member"))
+	orgMember.Get("/", orgHandler.GetOrganization) // Get Org Details
+	orgMember.Get("/usage", orgHandler.GetUsage)   // Get Org Usage
 	orgMember.Get("/members", orgHandler.GetMembers)
 	orgMember.Get("/teams", orgHandler.GetTeams)
 
@@ -490,4 +495,46 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	db.Model(&admin).Update("current_project_id", project.ID)
 
 	fmt.Println("✅ Seed Complete. Login: admin@sankofa.dev / password")
+}
+
+func seedDefaultPlans(db *gorm.DB) {
+	plans := []database.Plan{
+		{
+			Name:         "Free",
+			EventLimit:   1000000,
+			ProfileLimit: 1000,
+			ReplayLimit:  1000,
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+		},
+		{
+			Name:         "Pro",
+			EventLimit:   10000000,
+			ProfileLimit: 100000,
+			ReplayLimit:  10000,
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+		},
+		{
+			Name:         "Enterprise",
+			EventLimit:   100000000,
+			ProfileLimit: 1000000,
+			ReplayLimit:  100000,
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+		},
+	}
+
+	for _, p := range plans {
+		// Upsert
+		var px database.Plan
+		if err := db.Where("name = ?", p.Name).First(&px).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				db.Create(&p)
+			}
+		} else {
+			db.Model(&px).Updates(p)
+		}
+	}
+	fmt.Println("✅ Plans Seeded")
 }

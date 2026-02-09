@@ -40,7 +40,7 @@ type Project struct {
 	TestAPIKey     string        `gorm:"uniqueIndex" json:"test_api_key"`     // sk_test_...
 	Timezone       string        `gorm:"default:'Africa/Accra'" json:"timezone"`
 	Region         string        `gorm:"default:'eu-west-1'" json:"region"`
-	CreatedByID    uint          `json:"created_by_id"`
+	CreatedByID    uint          `json:"created_by_id" gorm:"column:created_by_id;index"`
 	CreatedBy      *User         `json:"created_by" gorm:"foreignKey:CreatedByID"`
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
@@ -87,4 +87,14 @@ type TeamProject struct {
 	ProjectID uint      `gorm:"primaryKey" json:"project_id"`
 	Role      string    `gorm:"default:'Viewer'" json:"role"` // Viewer, Editor, Admin
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Plan defines the limits for an organization.
+type Plan struct {
+	Name         string    `gorm:"primaryKey" json:"name"` // Free, Pro, Enterprise
+	EventLimit   int64     `json:"event_limit"`
+	ProfileLimit int64     `json:"profile_limit"`
+	ReplayLimit  int64     `json:"replay_limit"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
