@@ -29,6 +29,120 @@ func (h *AuthHandler) RegisterRoutes(api fiber.Router) {
 	auth.Post("/register", h.Register)
 	auth.Post("/login", h.Login)
 	auth.Get("/me", h.Me)
+	auth.Put("/me", h.UpdateMe)
+	auth.Put("/password", h.UpdatePassword)
+}
+
+// Helper to extract user ID from token
+func (h *AuthHandler) extractUserFromToken(c *fiber.Ctx) (uint, error) {
+	authHeader := c.Get("Authorization")
+	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
+		return 0, fmt.Errorf("missing or invalid token")
+	}
+	tokenString := authHeader[7:]
+
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return jwtSecret, nil
+	})
+
+	if err != nil || !token.Valid {
+		return 0, fmt.Errorf("invalid token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return 0, fmt.Errorf("invalid token claims")
+	}
+
+	return uint(claims["user_id"].(float64)), nil
+}
+
+func (h *AuthHandler) UpdateMe(c *fiber.Ctx) error {
+	userID, err := h.extractUserFromToken(c)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	type UpdateReq struct {
+		FullName  string `json:"full_name"`
+		Email     string `json:"email"`
+		AvatarURL string `json:"avatar_url"`
+	}
+	var req UpdateReq
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	var user database.User
+	if err := h.DB.First(&user, userID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	if req.FullName != "" {
+		user.FullName = req.FullName
+	}
+	if req.Email != "" {
+		// potential: check for email uniqueness if changed
+		user.Email = req.Email
+	}
+	if req.AvatarURL != "" {
+		user.AvatarURL = req.AvatarURL
+	}
+	user.UpdatedAt = time.Now()
+
+	if err := h.DB.Save(&user).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update profile"})
+	}
+
+	return c.JSON(user)
+}
+
+func (h *AuthHandler) UpdatePassword(c *fiber.Ctx) error {
+	userID, err := h.extractUserFromToken(c)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	type PasswordReq struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	var req PasswordReq
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	if len(req.NewPassword) < 8 {
+		return c.Status(400).JSON(fiber.Map{"error": "Password must be at least 8 characters"})
+	}
+
+	var user database.User
+	if err := h.DB.First(&user, userID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	// Verify current password
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Incorrect current password"})
+	}
+
+	// Hash new password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+
+	user.PasswordHash = string(hashedPassword)
+	user.UpdatedAt = time.Now()
+
+	if err := h.DB.Save(&user).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update password"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok"})
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
@@ -193,42 +307,10 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 }
 
 func (h *AuthHandler) Me(c *fiber.Ctx) error {
-	// TODO: Use middleware to extract user from token
-	// For now, simple extraction or trust the caller/middleware
-	// Let's assume the client sends "Authorization: Bearer <token>"
-	// and we decode it here for simplicity in this step, or reuse helper.
-
-	authHeader := c.Get("Authorization")
-	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
-		return c.Status(401).JSON(fiber.Map{"error": "Missing or invalid token"})
-	}
-	tokenString := authHeader[7:]
-
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return jwtSecret, nil
-	})
-
+	userID, err := h.extractUserFromToken(c)
 	if err != nil {
-		log.Printf("Token parse error: %v", err)
-		return c.Status(401).JSON(fiber.Map{"error": "Invalid token"})
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
-	if !token.Valid {
-		log.Println("Token is invalid")
-		return c.Status(401).JSON(fiber.Map{"error": "Invalid token"})
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		log.Println("Invalid token claims")
-		return c.Status(401).JSON(fiber.Map{"error": "Invalid token claims"})
-	}
-
-	log.Printf("Claims: %v", claims)
-
-	userID := uint(claims["user_id"].(float64))
 
 	var user database.User
 	if err := h.DB.Preload("CurrentProject").First(&user, "id = ?", userID).Error; err != nil {
@@ -237,7 +319,7 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 
 	// Fetch memberships
 	var orgMemberships []database.OrganizationMember
-	h.DB.Where("user_id = ?", user.ID).Find(&orgMemberships)
+	h.DB.Preload("Organization").Where("user_id = ?", user.ID).Find(&orgMemberships)
 
 	var projectMemberships []database.ProjectMember
 	h.DB.Where("user_id = ?", user.ID).Find(&projectMemberships)

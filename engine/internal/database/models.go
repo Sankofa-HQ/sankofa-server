@@ -24,33 +24,41 @@ type Organization struct {
 	Slug         string    `gorm:"uniqueIndex;not null" json:"slug"`
 	BillingEmail string    `json:"billing_email"`
 	Plan         string    `gorm:"default:Free" json:"plan"` // Free, Pro, Enterprise
+	CompanySize  string    `json:"company_size"`
+	Industry     string    `json:"industry"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Project is a container for events (e.g., Staging vs Prod).
 type Project struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	OrganizationID uint      `gorm:"not null;index" json:"organization_id"` // FK
-	Name           string    `gorm:"not null" json:"name"`
-	APIKey         string    `gorm:"uniqueIndex;not null" json:"api_key"` // sk_live_...
-	Timezone       string    `gorm:"default:'Africa/Accra'" json:"timezone"`
-	Region         string    `gorm:"default:'eu-west-1'" json:"region"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uint          `gorm:"primaryKey" json:"id"`
+	OrganizationID uint          `gorm:"not null;index" json:"organization_id"` // FK
+	Organization   *Organization `json:"organization" gorm:"foreignKey:OrganizationID"`
+	Name           string        `gorm:"not null" json:"name"`
+	APIKey         string        `gorm:"uniqueIndex;not null" json:"api_key"` // sk_live_...
+	TestAPIKey     string        `gorm:"uniqueIndex" json:"test_api_key"`     // sk_test_...
+	Timezone       string        `gorm:"default:'Africa/Accra'" json:"timezone"`
+	Region         string        `gorm:"default:'eu-west-1'" json:"region"`
+	CreatedByID    uint          `json:"created_by_id"`
+	CreatedBy      *User         `json:"created_by" gorm:"foreignKey:CreatedByID"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
 }
 
 // OrganizationMember links Users to Organizations.
 type OrganizationMember struct {
-	OrganizationID uint      `gorm:"primaryKey" json:"organization_id"`
-	UserID         uint      `gorm:"primaryKey" json:"user_id"`
-	Role           string    `gorm:"default:'Member'" json:"role"` // Owner, Member
-	CreatedAt      time.Time `json:"created_at"`
+	OrganizationID uint          `gorm:"primaryKey" json:"organization_id"`
+	Organization   *Organization `json:"organization" gorm:"foreignKey:OrganizationID"`
+	UserID         uint          `gorm:"primaryKey" json:"user_id"`
+	Role           string        `gorm:"default:'Member'" json:"role"` // Owner, Member
+	CreatedAt      time.Time     `json:"created_at"`
 }
 
 // ProjectMember controls access to Projects.
 type ProjectMember struct {
 	ProjectID uint      `gorm:"primaryKey" json:"project_id"`
+	Project   *Project  `json:"project" gorm:"foreignKey:ProjectID"`
 	UserID    uint      `gorm:"primaryKey" json:"user_id"`
 	Role      string    `gorm:"default:'Viewer'" json:"role"` // Admin, Editor, Viewer
 	CreatedAt time.Time `json:"created_at"`

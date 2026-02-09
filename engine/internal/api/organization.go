@@ -27,8 +27,171 @@ func (h *OrganizationHandler) RegisterRoutes(router fiber.Router) {
 	router.Post("/projects", h.CreateProject)
 	router.Post("/invite", h.InviteMember)
 	router.Get("/members", h.GetMembers)
+	router.Post("/members", h.GetMembers)
 	router.Delete("/members/:user_id", h.RemoveMember)
+	router.Post("/:id/leave", h.LeaveOrganization)
 }
+
+// ... existing code ...
+
+func (h *OrganizationHandler) LeaveOrganization(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	orgID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid organization ID"})
+	}
+
+	// Calculate how many owners are left
+	var ownerCount int64
+	if err := h.DB.Model(&database.OrganizationMember{}).
+		Where("organization_id = ? AND role = 'Owner'", orgID).
+		Count(&ownerCount).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check ownership"})
+	}
+
+	// Check if this user is the last owner
+	var membership database.OrganizationMember
+	if err := h.DB.Where("organization_id = ? AND user_id = ?", orgID, userID).First(&membership).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Membership not found"})
+	}
+
+	if membership.Role == "Owner" && ownerCount == 1 {
+		return c.Status(403).JSON(fiber.Map{"error": "Cannot leave organization as the last owner. Promote someone else or delete the organization."})
+	}
+
+	// Remove membership
+	if err := h.DB.Delete(&membership).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to leave organization"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Left organization successfully"})
+}
+
+// CreateOrganization - POST /api/orgs
+func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(uint)
+
+	type Request struct {
+		Name        string `json:"name"`
+		CompanySize string `json:"company_size"`
+		Industry    string `json:"industry"`
+		Region      string `json:"region"`
+	}
+	var req Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.Name == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Organization name is required"})
+	}
+
+	// Defaults
+	if req.Region == "" {
+		req.Region = "us-east-1"
+	}
+
+	tx := h.DB.Begin()
+
+	// 1. Create Organization
+	org := database.Organization{
+		Name:        req.Name,
+		Slug:        generateSlug(req.Name),
+		Plan:        "Free",
+		CompanySize: req.CompanySize,
+		Industry:    req.Industry,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := tx.Create(&org).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create organization"})
+	}
+
+	// 2. Link User as Owner
+	if err := tx.Create(&database.OrganizationMember{
+		OrganizationID: org.ID,
+		UserID:         userID,
+		Role:           "Owner",
+		CreatedAt:      time.Now(),
+	}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to link user to org"})
+	}
+
+	// 3. Create Default Project
+	liveKey, _ := generateOrgAPIKey("live")
+	testKey, _ := generateOrgAPIKey("test")
+
+	project := database.Project{
+		OrganizationID: org.ID,
+		Name:           req.Name, // Use Org Name as default Project Name
+		APIKey:         liveKey,
+		TestAPIKey:     testKey,
+		Timezone:       "UTC",
+		Region:         req.Region,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	if err := tx.Create(&project).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create default project"})
+	}
+
+	// 4. Link User as Project Admin
+	if err := tx.Create(&database.ProjectMember{
+		ProjectID: project.ID,
+		UserID:    userID,
+		Role:      "Admin",
+		CreatedAt: time.Now(),
+	}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to link user to project"})
+	}
+
+	tx.Commit()
+
+	return c.JSON(org)
+}
+
+// UpdateOrganization - PUT /api/v1/orgs/:id
+func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
+	orgID, err := strconv.Atoi(c.Params("org_id")) // middleware uses :org_id
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid organization ID"})
+	}
+
+	type Request struct {
+		Name string `json:"name"`
+	}
+	var req Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	var org database.Organization
+	if err := h.DB.First(&org, orgID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
+	}
+
+	if req.Name != "" {
+		org.Name = req.Name
+	}
+
+	if err := h.DB.Save(&org).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update organization"})
+	}
+
+	return c.JSON(org)
+}
+
+// Helper to avoid dependency on internal/api packet private func in auth.go if they are different files in same package.
+// They are in same package 'api', so 'generateSlug' from auth.go SHOULD be visible if it is in the same package.
+// Let's verify if auth.go is in package api. Yes it is.
 
 // CreateProject - /v1/orgs/:org_id/projects
 func (h *OrganizationHandler) CreateProject(c *fiber.Ctx) error {
@@ -53,12 +216,14 @@ func (h *OrganizationHandler) CreateProject(c *fiber.Ctx) error {
 		req.Timezone = "UTC"
 	}
 
-	apiKey, _ := generateOrgAPIKey()
+	liveKey, _ := generateOrgAPIKey("live")
+	testKey, _ := generateOrgAPIKey("test")
 
 	project := database.Project{
 		OrganizationID: orgID,
 		Name:           req.Name,
-		APIKey:         apiKey,
+		APIKey:         liveKey,
+		TestAPIKey:     testKey,
 		Region:         req.Region,
 		Timezone:       req.Timezone,
 		CreatedAt:      time.Now(),
@@ -266,12 +431,16 @@ func (h *OrganizationHandler) RemoveMember(c *fiber.Ctx) error {
 	return c.SendStatus(http.StatusOK)
 }
 
-func generateOrgAPIKey() (string, error) {
+func generateOrgAPIKey(env string) (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	return "sk_live_" + hex.EncodeToString(bytes), nil
+	prefix := "sk_live_"
+	if env == "test" {
+		prefix = "sk_test_"
+	}
+	return prefix + hex.EncodeToString(bytes), nil
 }
 
 // --- Team Handlers ---

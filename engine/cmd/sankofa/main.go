@@ -155,7 +155,7 @@ func main() {
 
 	// HANDLERS
 	authHandler := api.NewAuthHandler(db)
-	projectHandler := api.NewProjectHandler(db)
+	projectHandler := api.NewProjectHandler(db, chConn)
 	orgHandler := api.NewOrganizationHandler(db) // New
 	middleware := middleware.NewAuthMiddleware(db)
 
@@ -165,6 +165,11 @@ func main() {
 	protected := apiRouter.Group("/")
 	protected.Use(middleware.RequireAuth)
 	projectHandler.RegisterRoutes(protected)
+	protected.Post("/orgs", orgHandler.CreateOrganization)
+	protected.Post("/upload", api.UploadHandler) // Upload Endpoint
+
+	// Validating/Serving Static Uploads
+	app.Static("/uploads", "./uploads")
 
 	// Org Routes (Multiplayer)
 	orgs := v1.Group("/orgs/:org_id")
@@ -172,6 +177,7 @@ func main() {
 
 	// Create Project & Invite & Remove -> Need Admin/Owner
 	orgAdmin := orgs.Group("/", middleware.RequireOrgAccess("Admin"))
+	orgAdmin.Put("/", orgHandler.UpdateOrganization) // Update Org Details
 	orgAdmin.Post("/projects", orgHandler.CreateProject)
 	orgAdmin.Post("/invite", orgHandler.InviteMember)
 	orgAdmin.Delete("/members/:user_id", orgHandler.RemoveMember)
