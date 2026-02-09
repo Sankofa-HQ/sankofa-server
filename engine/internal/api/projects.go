@@ -25,13 +25,14 @@ func NewProjectHandler(db *gorm.DB, ch driver.Conn) *ProjectHandler {
 	return &ProjectHandler{DB: db, CH: ch}
 }
 
-func (h *ProjectHandler) RegisterRoutes(api fiber.Router) {
-	projects := api.Group("/projects")
+func (h *ProjectHandler) RegisterRoutes(api fiber.Router, authMiddleware fiber.Handler) {
+	projects := api.Group("/projects", authMiddleware)
 	projects.Get("/", h.GetProjects) // ?org_id=1
 	projects.Post("/", h.CreateProject)
-	projects.Put("/:id", h.UpdateProject)
+	projects.Put("/:id", h.UpdateProject) // ?org_id=1
+	projects.Delete("/:id", h.DeleteProject)
 
-	orgs := api.Group("/organizations")
+	orgs := api.Group("/organizations", authMiddleware)
 	orgs.Get("/", h.GetOrganizations)
 }
 
@@ -240,6 +241,47 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	h.DB.First(&project, projectID)
 
 	return c.JSON(project)
+}
+
+// DeleteProject - DELETE /v1/projects/:id
+func (h *ProjectHandler) DeleteProject(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid project ID"})
+	}
+
+	// 1. Verify Access (Admin/Owner role required)
+	var member database.ProjectMember
+	if err := h.DB.Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+	if member.Role != "Admin" && member.Role != "Owner" {
+		return c.Status(403).JSON(fiber.Map{"error": "Only admins can delete projects"})
+	}
+
+	// 2. Delete Project and related data
+	tx := h.DB.Begin()
+
+	// Delete Project Members
+	if err := tx.Where("project_id = ?", projectID).Delete(&database.ProjectMember{}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete project members"})
+	}
+
+	// Delete Project
+	if err := tx.Delete(&database.Project{}, projectID).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete project"})
+	}
+
+	tx.Commit()
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Project deleted successfully"})
 }
 
 // Helper to avoid import cycles / duplication. In real app, put in utils.

@@ -301,6 +301,7 @@ func (h *OrganizationHandler) CreateProject(c *fiber.Ctx) error {
 		TestAPIKey:     testKey,
 		Region:         req.Region,
 		Timezone:       req.Timezone,
+		CreatedByID:    userID,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -651,26 +652,28 @@ func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
 	}
 
 	// 3. Get Usage from ClickHouse
-	var totalEvents uint64
-	var totalProfiles uint64
+	var liveEvents, testEvents uint64
+	var liveProfiles, testProfiles uint64
 
-	// Get all projects for this org
-	var projectIDs []uint
-	h.DB.Model(&database.Project{}).Where("organization_id = ?", orgID).Pluck("id", &projectIDs)
+	if h.CH != nil {
+		strOrgID := strconv.Itoa(int(orgID))
 
-	if len(projectIDs) > 0 && h.CH != nil {
-		for _, pid := range projectIDs {
-			tenantID := strconv.Itoa(int(pid))
+		// Events - Live
+		if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE organization_id = ? AND environment = 'live'", strOrgID).Scan(&liveEvents); err != nil {
+			log.Println("ClickHouse Usage Query Error (Live Events):", err)
+		}
+		// Events - Test
+		if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE organization_id = ? AND environment = 'test'", strOrgID).Scan(&testEvents); err != nil {
+			log.Println("ClickHouse Usage Query Error (Test Events):", err)
+		}
 
-			var events uint64
-			if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE tenant_id = ?", tenantID).Scan(&events); err == nil {
-				totalEvents += events
-			}
-
-			var profiles uint64
-			if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM persons WHERE tenant_id = ?", tenantID).Scan(&profiles); err == nil {
-				totalProfiles += profiles
-			}
+		// Profiles - Live
+		if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM persons WHERE organization_id = ? AND environment = 'live'", strOrgID).Scan(&liveProfiles); err != nil {
+			log.Println("ClickHouse Usage Query Error (Live Profiles):", err)
+		}
+		// Profiles - Test
+		if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM persons WHERE organization_id = ? AND environment = 'test'", strOrgID).Scan(&testProfiles); err != nil {
+			log.Println("ClickHouse Usage Query Error (Test Profiles):", err)
 		}
 	}
 
@@ -681,9 +684,13 @@ func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
 			"limits": limits,
 		},
 		"usage": fiber.Map{
-			"events":   totalEvents,
-			"profiles": totalProfiles,
-			"replays":  0, // Mock for now
+			"events_live":    liveEvents,
+			"events_test":    testEvents,
+			"events_total":   liveEvents + testEvents,
+			"profiles_live":  liveProfiles,
+			"profiles_test":  testProfiles,
+			"profiles_total": liveProfiles + testProfiles,
+			"replays":        0, // Mock for now
 		},
 		"period": fiber.Map{
 			"start": time.Now().AddDate(0, 0, -15), // Mock cycle

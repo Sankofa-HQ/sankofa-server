@@ -74,20 +74,30 @@ type AnalyticsEvent struct {
 	DefaultProperties map[string]string `json:"default_properties"`
 	LibVersion        string            `json:"lib_version"`
 	TenantID          string            `json:"-"`
+	ProjectID         string            `json:"-"` // Explicit Project ID
+	OrganizationID    string            `json:"-"` // Explicit Org ID
+	Environment       string            `json:"-"` // 'live' or 'test'
 	Timestamp         time.Time         `json:"-"`
 }
 
 type PersonProfile struct {
-	DistinctID string            `json:"distinct_id"`
-	Properties map[string]string `json:"properties"`
-	TenantID   string            `json:"-"`
-	Timestamp  time.Time         `json:"-"`
+	DistinctID     string            `json:"distinct_id"`
+	Properties     map[string]string `json:"properties"`
+	TenantID       string            `json:"-"`
+	ProjectID      string            `json:"-"`
+	OrganizationID string            `json:"-"`
+	Environment    string            `json:"-"`
+	Timestamp      time.Time         `json:"-"`
 }
 
 type PersonAlias struct {
-	AliasID    string `json:"alias_id"`
-	DistinctID string `json:"distinct_id"`
-	TenantID   string `json:"-"`
+	AliasID        string    `json:"alias_id"`
+	DistinctID     string    `json:"distinct_id"`
+	TenantID       string    `json:"-"`
+	ProjectID      string    `json:"-"`
+	OrganizationID string    `json:"-"`
+	Environment    string    `json:"-"`
+	Timestamp      time.Time `json:"-"`
 }
 
 func main() {
@@ -164,11 +174,13 @@ func main() {
 	authHandler.RegisterRoutes(apiRouter)
 
 	// Protected Routes
-	protected := apiRouter.Group("/")
-	protected.Use(middleware.RequireAuth)
-	projectHandler.RegisterRoutes(protected)
-	protected.Post("/orgs", orgHandler.CreateOrganization)
-	protected.Post("/upload", api.UploadHandler) // Upload Endpoint
+	// protected := apiRouter.Group("/") // REMOVED: Capture-all group caused issues
+	// protected.Use(middleware.RequireAuth)
+
+	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
+
+	apiRouter.Post("/orgs", middleware.RequireAuth, orgHandler.CreateOrganization)
+	apiRouter.Post("/upload", middleware.RequireAuth, api.UploadHandler) // Upload Endpoint
 
 	// Validating/Serving Static Uploads
 	app.Static("/uploads", "./uploads")
@@ -260,12 +272,26 @@ func main() {
 	v1.Post("/track", func(c *fiber.Ctx) error {
 		apiKey := c.Get("x-api-key")
 		if apiKey == "" {
+			log.Println("⚠️ Missing API Key. Headers:", c.GetReqHeaders())
 			return c.SendStatus(401)
 		}
+		log.Println("📝 Track Request. Key:", apiKey)
 
+		// Calculate Environment & Find Project
 		var project database.Project
-		if err := db.First(&project, "api_key = ?", apiKey).Error; err != nil {
-			return c.SendStatus(403)
+		var environment string
+
+		// Check Live Key
+		if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
+			environment = "live"
+		} else {
+			// Check Test Key
+			if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
+				environment = "test"
+			} else {
+				// Invalid Key
+				return c.SendStatus(403)
+			}
 		}
 
 		var e AnalyticsEvent
@@ -273,12 +299,89 @@ func main() {
 			return c.SendStatus(400)
 		}
 
-		// Use Project ID as Tenant ID for ClickHouse isolation
-		e.TenantID = fmt.Sprint(project.ID)
+		// Context Resolution
+		e.TenantID = fmt.Sprint(project.ID) // Still used for sharding/partitioning maybe? Or just legacy.
+		e.ProjectID = fmt.Sprint(project.ID)
+		e.OrganizationID = fmt.Sprint(project.OrganizationID)
+		e.Environment = environment
 		e.Timestamp = time.Now()
 
 		select {
 		case eventStream <- e:
+			return c.SendStatus(200)
+		default:
+			return c.Status(503).JSON(fiber.Map{"error": "Buffer full"})
+		}
+	})
+
+	v1.Post("/people", func(c *fiber.Ctx) error {
+		apiKey := c.Get("x-api-key")
+		if apiKey == "" {
+			return c.SendStatus(401)
+		}
+
+		// Calculate Environment & Find Project
+		var project database.Project
+		var environment string
+
+		if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
+			environment = "live"
+		} else if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
+			environment = "test"
+		} else {
+			return c.SendStatus(403)
+		}
+
+		var p PersonProfile
+		if err := c.BodyParser(&p); err != nil {
+			return c.SendStatus(400)
+		}
+
+		p.TenantID = fmt.Sprint(project.ID)
+		p.ProjectID = fmt.Sprint(project.ID)
+		p.OrganizationID = fmt.Sprint(project.OrganizationID)
+		p.Environment = environment
+		p.Timestamp = time.Now()
+
+		select {
+		case personStream <- p:
+			return c.SendStatus(200)
+		default:
+			return c.Status(503).JSON(fiber.Map{"error": "Buffer full"})
+		}
+	})
+
+	v1.Post("/alias", func(c *fiber.Ctx) error {
+		apiKey := c.Get("x-api-key")
+		if apiKey == "" {
+			return c.SendStatus(401)
+		}
+
+		// Calculate Environment & Find Project
+		var project database.Project
+		var environment string
+
+		if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
+			environment = "live"
+		} else if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
+			environment = "test"
+		} else {
+			return c.SendStatus(403)
+		}
+
+		var a PersonAlias
+		if err := c.BodyParser(&a); err != nil {
+			return c.SendStatus(400)
+		}
+
+		a.TenantID = fmt.Sprint(project.ID)
+		a.ProjectID = fmt.Sprint(project.ID)
+		a.OrganizationID = fmt.Sprint(project.OrganizationID)
+		a.Environment = environment
+		a.Timestamp = time.Now()
+
+		select {
+		case aliasStream <- a:
 			return c.SendStatus(200)
 		default:
 			return c.Status(503).JSON(fiber.Map{"error": "Buffer full"})
@@ -344,7 +447,8 @@ func startEventWorker(ctx context.Context, conn driver.Conn, stream <-chan Analy
 func startPersonWorker(ctx context.Context, conn driver.Conn, stream <-chan PersonProfile) {
 	for p := range stream {
 		ctx := context.Background()
-		err := conn.Exec(ctx, "INSERT INTO persons (tenant_id, distinct_id, properties, last_seen) VALUES (?, ?, ?, ?)", p.TenantID, p.DistinctID, p.Properties, p.Timestamp)
+		err := conn.Exec(ctx, "INSERT INTO persons (tenant_id, project_id, organization_id, environment, distinct_id, properties, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			p.TenantID, p.ProjectID, p.OrganizationID, p.Environment, p.DistinctID, p.Properties, p.Timestamp)
 		if err != nil {
 			log.Println("❌ Person Write Error:", err)
 		}
@@ -354,7 +458,8 @@ func startPersonWorker(ctx context.Context, conn driver.Conn, stream <-chan Pers
 func startAliasWorker(ctx context.Context, conn driver.Conn, stream <-chan PersonAlias) {
 	for a := range stream {
 		ctx := context.Background()
-		err := conn.Exec(ctx, "INSERT INTO person_aliases (tenant_id, alias_id, distinct_id) VALUES (?, ?, ?)", a.TenantID, a.AliasID, a.DistinctID)
+		err := conn.Exec(ctx, "INSERT INTO person_aliases (tenant_id, project_id, organization_id, environment, alias_id, distinct_id) VALUES (?, ?, ?, ?, ?, ?)",
+			a.TenantID, a.ProjectID, a.OrganizationID, a.Environment, a.AliasID, a.DistinctID)
 		if err != nil {
 			log.Println("❌ Alias Write Error:", err)
 		}
@@ -363,7 +468,7 @@ func startAliasWorker(ctx context.Context, conn driver.Conn, stream <-chan Perso
 
 func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 	ctx := context.Background()
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (tenant_id, timestamp, event_name, distinct_id, properties, default_properties, lib_version)")
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, properties, default_properties, lib_version)")
 	if err != nil {
 		log.Println("❌ Batch Prep Error:", err)
 		return
@@ -375,7 +480,18 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 		if e.DefaultProperties == nil {
 			e.DefaultProperties = make(map[string]string)
 		}
-		batch.Append(e.TenantID, e.Timestamp, e.EventName, e.DistinctID, e.Properties, e.DefaultProperties, e.LibVersion)
+		batch.Append(
+			e.TenantID,
+			e.ProjectID,
+			e.OrganizationID,
+			e.Environment,
+			e.Timestamp,
+			e.EventName,
+			e.DistinctID,
+			e.Properties,
+			e.DefaultProperties,
+			e.LibVersion,
+		)
 	}
 	if err := batch.Send(); err != nil {
 		log.Println("❌ ClickHouse Write Error:", err)
@@ -404,6 +520,9 @@ func initClickHouseSchema(conn driver.Conn) {
 	err := conn.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS events (
 		tenant_id String,
+		project_id String,
+		organization_id String,
+		environment String, -- 'live' or 'test'
 		timestamp DateTime,
 		event_name String,
 		distinct_id String,
@@ -411,7 +530,7 @@ func initClickHouseSchema(conn driver.Conn) {
 		default_properties Map(String, String),
 		lib_version String
 	) ENGINE = MergeTree()
-	ORDER BY (tenant_id, event_name, timestamp, distinct_id)
+	ORDER BY (organization_id, project_id, environment, event_name, timestamp)
 	`)
 	if err != nil {
 		log.Fatal("ClickHouse Init Error:", err)
@@ -421,27 +540,53 @@ func initClickHouseSchema(conn driver.Conn) {
 	err = conn.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS persons (
 		tenant_id String,
+		project_id String,
+		organization_id String,
+		environment String,
 		distinct_id String,
 		properties Map(String, String),
 		last_seen DateTime
 	) ENGINE = ReplacingMergeTree(last_seen)
-	ORDER BY (tenant_id, distinct_id)
+	ORDER BY (organization_id, project_id, environment, distinct_id)
 	`)
 	if err != nil {
 		log.Fatal("ClickHouse Init Error:", err)
+	}
+
+	// MIGRATION: Add columns if they don't exist (Idempotent)
+	cols := []string{"project_id", "organization_id", "environment"}
+	tables := []string{"events", "persons"}
+
+	for _, table := range tables {
+		for _, col := range cols {
+			_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s String", table, col))
+		}
 	}
 
 	// 3. Aliases
 	err = conn.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS person_aliases (
 		tenant_id String,
+		project_id String,
+		organization_id String,
+		environment String,
 		alias_id String,
 		distinct_id String
 	) ENGINE = ReplacingMergeTree()
-	ORDER BY (tenant_id, alias_id)
+	ORDER BY (organization_id, project_id, environment, alias_id)
 	`)
 	if err != nil {
 		log.Fatal("ClickHouse Init Error:", err)
+	}
+
+	// MIGRATION: Add columns if they don't exist (Idempotent)
+	cols = []string{"project_id", "organization_id", "environment"}
+	tables = []string{"events", "persons", "person_aliases"}
+
+	for _, table := range tables {
+		for _, col := range cols {
+			_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s String", table, col))
+		}
 	}
 }
 
@@ -476,16 +621,30 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	db.Create(&org)
 
 	// Create Project
+	// Create Project (Idempotent)
 	project := database.Project{
 		OrganizationID: org.ID,
 		Name:           "Sankofa Internal",
 		APIKey:         "sk_live_admin_key",
+		TestAPIKey:     "sk_test_admin_key",
 		Timezone:       "UTC",
 		Region:         "us-east-1",
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
-	db.Create(&project)
+
+	var existingProject database.Project
+	if err := db.Where("api_key = ?", project.APIKey).First(&existingProject).Error; err == nil {
+		// Project exists, ensure TestAPIKey is set
+		if existingProject.TestAPIKey == "" {
+			db.Model(&existingProject).Update("test_api_key", project.TestAPIKey)
+			fmt.Println("✅ Updated existing project with Test API Key")
+		}
+		project = existingProject
+	} else {
+		// Project doesn't exist, create it
+		db.Create(&project)
+	}
 
 	// Links
 	db.Create(&database.OrganizationMember{OrganizationID: org.ID, UserID: admin.ID, Role: "Owner", CreatedAt: time.Now()})
