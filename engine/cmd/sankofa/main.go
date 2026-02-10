@@ -169,6 +169,7 @@ func main() {
 	authHandler := api.NewAuthHandler(db)
 	projectHandler := api.NewProjectHandler(db, chConn)
 	orgHandler := api.NewOrganizationHandler(db, chConn) // New
+	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
 	middleware := middleware.NewAuthMiddleware(db)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -178,6 +179,7 @@ func main() {
 	// protected.Use(middleware.RequireAuth)
 
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
+	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Events under /api/v1/events
 
 	apiRouter.Post("/orgs", middleware.RequireAuth, orgHandler.CreateOrganization)
 	apiRouter.Post("/upload", middleware.RequireAuth, api.UploadHandler) // Upload Endpoint
