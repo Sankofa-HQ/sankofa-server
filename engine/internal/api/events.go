@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"sankofa/engine/internal/database"
@@ -27,6 +29,7 @@ func (h *EventsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 	events := router.Group("/events", authMiddleware)
 	events.Get("/", h.ListEvents)
 	events.Get("/names", h.GetEventNames)
+	events.Get("/counts", h.GetEventCounts)
 	events.Get("/:id", h.GetEventDetail)
 }
 
@@ -112,6 +115,36 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		args = append(args, endTime)
 	}
 
+	// Dynamic Property Filters
+	filtersJSON := c.Query("filters", "")
+	if filtersJSON != "" {
+		var filters []struct {
+			Property string `json:"property"`
+			Value    string `json:"value"`
+			Operator string `json:"operator"`
+		}
+		if err := json.Unmarshal([]byte(filtersJSON), &filters); err == nil {
+			for _, f := range filters {
+				if f.Property != "" && f.Value != "" {
+					key := f.Property
+					if strings.HasPrefix(key, "prop_") {
+						query += " AND properties[?] = ?"
+						args = append(args, key[5:], f.Value)
+					} else {
+						switch key {
+						case "event_name", "distinct_id", "lib_version":
+							query += fmt.Sprintf(" AND %s = ?", key)
+							args = append(args, f.Value)
+						default:
+							query += " AND default_properties[?] = ?"
+							args = append(args, key, f.Value)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Inline LIMIT/OFFSET (ClickHouse driver doesn't parameterize these well)
 	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d OFFSET %d", limit, offset)
 
@@ -186,6 +219,34 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	if endTime != "" {
 		countQuery += " AND timestamp <= parseDateTimeBestEffort(?)"
 		countArgs = append(countArgs, endTime)
+	}
+
+	if filtersJSON != "" {
+		var filters []struct {
+			Property string `json:"property"`
+			Value    string `json:"value"`
+			Operator string `json:"operator"`
+		}
+		if err := json.Unmarshal([]byte(filtersJSON), &filters); err == nil {
+			for _, f := range filters {
+				if f.Property != "" && f.Value != "" {
+					key := f.Property
+					if strings.HasPrefix(key, "prop_") {
+						countQuery += " AND properties[?] = ?"
+						countArgs = append(countArgs, key[5:], f.Value)
+					} else {
+						switch key {
+						case "event_name", "distinct_id", "lib_version":
+							countQuery += fmt.Sprintf(" AND %s = ?", key)
+							countArgs = append(countArgs, f.Value)
+						default:
+							countQuery += " AND default_properties[?] = ?"
+							countArgs = append(countArgs, key, f.Value)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if err := h.CH.QueryRow(context.Background(), countQuery, countArgs...).Scan(&totalCount); err != nil {
@@ -267,4 +328,69 @@ func (h *EventsHandler) GetEventDetail(c *fiber.Ctx) error {
 	// For now, events don't have unique IDs in our schema
 	// This would require adding a UUID field to events table
 	return c.Status(501).JSON(fiber.Map{"error": "Not implemented yet"})
+}
+
+// GetEventCounts - GET /api/v1/events/counts
+// Returns event counts grouped by event_name for the last 30 days
+func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	var project database.Project
+	queryProjectID := c.Query("project_id", "")
+
+	if queryProjectID != "" {
+		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	} else {
+		var user database.User
+		if err := h.DB.First(&user, userID).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
+		}
+		if user.CurrentProjectID == nil {
+			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
+		}
+		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	}
+
+	environment := c.Query("environment", "live")
+	days := c.QueryInt("days", 30)
+	projID := strconv.Itoa(int(project.ID))
+
+	query := `
+		SELECT event_name, count() as cnt
+		FROM events
+		WHERE tenant_id = ?
+			AND environment = ?
+			AND timestamp >= now() - INTERVAL ? DAY
+		GROUP BY event_name
+		ORDER BY cnt DESC
+	`
+
+	rows, err := h.CH.Query(context.Background(), query, projID, environment, days)
+	if err != nil {
+		log.Println("ClickHouse counts query error:", err)
+		return c.JSON(fiber.Map{"counts": map[string]uint64{}})
+	}
+	defer rows.Close()
+
+	counts := make(map[string]uint64)
+	for rows.Next() {
+		var name string
+		var cnt uint64
+		if err := rows.Scan(&name, &cnt); err != nil {
+			continue
+		}
+		counts[name] = cnt
+	}
+
+	return c.JSON(fiber.Map{
+		"counts": counts,
+		"days":   days,
+	})
 }
