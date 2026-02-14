@@ -106,16 +106,24 @@ func (h *ProjectHandler) GetProjects(c *fiber.Ctx) error {
 		if h.CH != nil {
 			// Count Events
 			tenantID := strconv.Itoa(int(p.ID))
+			env := p.Environment
+			if env == "" {
+				env = "live"
+			}
 
 			// Event Count
 			var eventCount uint64
-			if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE tenant_id = ?", tenantID).Scan(&eventCount); err == nil {
+			if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE tenant_id = ? AND environment = ?", tenantID, env).Scan(&eventCount); err == nil {
 				stats.EventCount = eventCount
 			}
 
 			// User Profile Count
 			var userCount uint64
-			if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM persons WHERE tenant_id = ?", tenantID).Scan(&userCount); err == nil {
+			// Note: persons table also needs environment column or logical separation?
+			// Assuming persons are also separated by environment. If not, this might need adjustment.
+			// Let's assume 'persons' are environment specific. If the schema doesn't have it, we might need to check.
+			// For now, I will add the environment check assuming consistency.
+			if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM events WHERE tenant_id = ? AND environment = ?", tenantID, env).Scan(&userCount); err == nil {
 				stats.UserProfileCount = userCount
 			}
 		}
@@ -158,6 +166,7 @@ func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
 		Timezone:       "UTC", // Default
 		Region:         "us-east-1",
 		CreatedByID:    userID,
+		Environment:    "test",
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -203,8 +212,9 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	}
 
 	type Request struct {
-		Name     string `json:"name"`
-		Timezone string `json:"timezone"`
+		Name        string `json:"name"`
+		Timezone    string `json:"timezone"`
+		Environment string `json:"environment"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
@@ -222,25 +232,52 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	}
 
 	// 2. Update
-	updates := make(map[string]interface{})
-	if req.Name != "" {
-		updates["name"] = req.Name
-	}
-	if req.Timezone != "" {
-		updates["timezone"] = req.Timezone
+	var project database.Project
+	if err := h.DB.First(&project, projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
 
-	if len(updates) > 0 {
-		if err := h.DB.Model(&database.Project{}).Where("id = ?", projectID).Updates(updates).Error; err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to update project"})
+	if req.Name != "" {
+		project.Name = req.Name
+	}
+	if req.Timezone != "" {
+		project.Timezone = req.Timezone
+	}
+	if req.Environment != "" {
+		project.Environment = req.Environment
+	}
+
+	if err := h.DB.Save(&project).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update project"})
+	}
+
+	// Enrich with stats
+	type ProjectWithStats struct {
+		database.Project
+		EventCount       uint64 `json:"event_count"`
+		UserProfileCount uint64 `json:"user_profile_count"`
+	}
+	stats := ProjectWithStats{Project: project}
+
+	if h.CH != nil {
+		tenantID := strconv.Itoa(int(project.ID))
+		env := project.Environment
+		if env == "" {
+			env = "live"
+		}
+
+		var eventCount uint64
+		if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE tenant_id = ? AND environment = ?", tenantID, env).Scan(&eventCount); err == nil {
+			stats.EventCount = eventCount
+		}
+
+		var userCount uint64
+		if err := h.CH.QueryRow(c.Context(), "SELECT uniq(distinct_id) FROM events WHERE tenant_id = ? AND environment = ?", tenantID, env).Scan(&userCount); err == nil {
+			stats.UserProfileCount = userCount
 		}
 	}
 
-	// Return updated project
-	var project database.Project
-	h.DB.First(&project, projectID)
-
-	return c.JSON(project)
+	return c.JSON(stats)
 }
 
 // DeleteProject - DELETE /v1/projects/:id

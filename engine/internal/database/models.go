@@ -38,6 +38,7 @@ type Project struct {
 	Name           string        `gorm:"not null" json:"name"`
 	APIKey         string        `gorm:"uniqueIndex;not null" json:"api_key"` // sk_live_...
 	TestAPIKey     string        `gorm:"uniqueIndex" json:"test_api_key"`     // sk_test_...
+	Environment    string        `gorm:"default:'live'" json:"environment"`   // live, test
 	Timezone       string        `gorm:"default:'Africa/Accra'" json:"timezone"`
 	Region         string        `gorm:"default:'eu-west-1'" json:"region"`
 	CreatedByID    uint          `json:"created_by_id" gorm:"column:created_by_id;index"`
