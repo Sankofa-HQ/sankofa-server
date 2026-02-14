@@ -112,8 +112,9 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	// 2. Parse Event Queries (or Fallback)
 	queriesJSON := c.Query("queries", "")
 	var eventQueries []struct {
-		EventName string `json:"eventName"`
-		Filters   []struct {
+		EventName   string `json:"eventName"`
+		IsFirstTime bool   `json:"isFirstTime"`
+		Filters     []struct {
 			Property    string `json:"property"`
 			Value       string `json:"value"`
 			Operator    string `json:"operator"`
@@ -150,8 +151,9 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		}
 
 		eventQueries = append(eventQueries, struct {
-			EventName string `json:"eventName"`
-			Filters   []struct {
+			EventName   string `json:"eventName"`
+			IsFirstTime bool   `json:"isFirstTime"`
+			Filters     []struct {
 				Property    string `json:"property"`
 				Value       string `json:"value"`
 				Operator    string `json:"operator"`
@@ -174,6 +176,13 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 			if q.EventName != "" {
 				andClauses = append(andClauses, "event_name = ?")
 				queryArgs = append(queryArgs, q.EventName)
+			}
+
+			// First Time Filter
+			if q.IsFirstTime {
+				// Keep only events that created the user-event pairing
+				// Using a subquery to find min timestamp for each (distinct_id, event_name)
+				andClauses = append(andClauses, "(distinct_id, event_name, timestamp) IN (SELECT distinct_id, event_name, min(timestamp) FROM events GROUP BY distinct_id, event_name)")
 			}
 
 			// Property Filters
