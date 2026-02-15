@@ -136,3 +136,83 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 		"offset": offset,
 	})
 }
+
+// GetPerson - GET /api/v1/people/:id
+func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
+	distinctID := c.Params("id")
+	if distinctID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing distinct_id"})
+	}
+
+	// 1. Auth & Context
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	// Resolve Project
+	var project database.Project
+	queryProjectID := c.Query("project_id", "")
+
+	if queryProjectID != "" {
+		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	} else {
+		var user database.User
+		if err := h.DB.First(&user, userID).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
+		}
+		if user.CurrentProjectID == nil {
+			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
+		}
+		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	}
+
+	environment := c.Query("environment", "live")
+	projID := strconv.Itoa(int(project.ID))
+
+	// 2. Fetch Person from ClickHouse
+	query := `
+		SELECT 
+			p.distinct_id,
+			p.properties,
+			p.last_seen,
+			groupArray(pa.alias_id) as aliases
+		FROM persons p
+		LEFT JOIN person_aliases pa 
+			ON p.distinct_id = pa.distinct_id 
+			AND p.project_id = pa.project_id 
+			AND p.environment = pa.environment
+		WHERE p.project_id = ? AND p.environment = ? AND p.distinct_id = ?
+		GROUP BY p.distinct_id, p.properties, p.last_seen
+		LIMIT 1
+	`
+
+	var p PersonProfile
+	if err := h.CH.QueryRow(context.Background(), query, projID, environment, distinctID).Scan(
+		&p.DistinctID, &p.Properties, &p.LastSeen, &p.Aliases,
+	); err != nil {
+		if err.Error() == "sql: no rows in result set" { // Check standard sql error or driver specific
+			return c.Status(404).JSON(fiber.Map{"error": "Person not found"})
+		}
+		log.Println("Details: ClickHouse GetPerson Error:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch person"})
+	}
+
+	// Clean aliases
+	var cleanAliases []string
+	for _, a := range p.Aliases {
+		if a != "" {
+			cleanAliases = append(cleanAliases, a)
+		}
+	}
+	p.Aliases = cleanAliases
+	if p.Aliases == nil {
+		p.Aliases = []string{}
+	}
+
+	return c.JSON(fiber.Map{"data": p})
+}

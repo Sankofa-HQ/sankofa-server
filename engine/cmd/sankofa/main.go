@@ -182,6 +182,7 @@ func main() {
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
 	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Events under /api/v1/events
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
+	v1.Get("/people/:id", middleware.RequireAuth, peopleHandler.GetPerson)
 
 	apiRouter.Post("/orgs", middleware.RequireAuth, orgHandler.CreateOrganization)
 	apiRouter.Post("/upload", middleware.RequireAuth, api.UploadHandler) // Upload Endpoint
