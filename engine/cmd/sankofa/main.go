@@ -170,6 +170,7 @@ func main() {
 	projectHandler := api.NewProjectHandler(db, chConn)
 	orgHandler := api.NewOrganizationHandler(db, chConn) // New
 	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
+	peopleHandler := api.NewPeopleHandler(db, chConn)    // People
 	middleware := middleware.NewAuthMiddleware(db)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -180,6 +181,7 @@ func main() {
 
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
 	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Events under /api/v1/events
+	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
 
 	apiRouter.Post("/orgs", middleware.RequireAuth, orgHandler.CreateOrganization)
 	apiRouter.Post("/upload", middleware.RequireAuth, api.UploadHandler) // Upload Endpoint
@@ -234,41 +236,13 @@ func main() {
 		return c.JSON(data)
 	})
 
-	// Users: List profiles
-	analytics.Get("/users", func(c *fiber.Ctx) error {
-		query := `
-			SELECT 
-				distinct_id, 
-				argMax(properties, last_seen) as props, 
-				max(last_seen) as last_active 
-			FROM persons 
-			GROUP BY distinct_id 
-			ORDER BY last_active DESC 
-			LIMIT 100
-		`
-		rows, err := chConn.Query(context.Background(), query)
-		if err != nil {
-			// If ClickHouse fails/is empty, return empty list instead of 500 for demo
-			log.Println("ClickHouse Query Error:", err)
-			return c.JSON([]any{})
-		}
-		defer rows.Close()
-
-		type UserProfile struct {
-			DistinctID string            `json:"distinct_id"`
-			Properties map[string]string `json:"properties"`
-			LastActive time.Time         `json:"last_active"`
-		}
-		var users []UserProfile
-		for rows.Next() {
-			var u UserProfile
-			if err := rows.Scan(&u.DistinctID, &u.Properties, &u.LastActive); err != nil {
-				continue
-			}
-			users = append(users, u)
-		}
-		return c.JSON(users)
-	})
+	// Users: List profiles (Legacy - Redirect to v1/people in logic if needed, or just keep as backup for now but frontend will use v1)
+	// I'll keep it commented out to avoid conflict/confusion
+	/*
+		analytics.Get("/users", func(c *fiber.Ctx) error {
+			// ... legacy ...
+		})
+	*/
 
 	// INGESTION (v1)
 	v1.Post("/track", func(c *fiber.Ctx) error {
