@@ -31,12 +31,21 @@ type PersonProfile struct {
 	Aliases    []string          `json:"aliases"`
 }
 
-// PropertyFilter represents a user property filter from the frontend
-type PropertyFilter struct {
-	FilterType string `json:"filterType"`
-	Property   string `json:"property"`
-	Operator   string `json:"operator"`
-	Value      string `json:"value"`
+// Filter represents a unified filter from the frontend (user property or event)
+type Filter struct {
+	Id           string `json:"id"`
+	FilterType   string `json:"filterType"` // "user_property" or "event" or "cohort"
+	
+	// User Property Fields
+	Property     string `json:"property"`
+	Operator     string `json:"operator"`
+	Value        interface{} `json:"value"` // Can be string or number
+	
+	// Event Filter Fields
+	BehaviorType string `json:"behaviorType"` // "did" or "did_not"
+	EventName    string `json:"eventName"`
+	Metric       string `json:"metric"`       // "total_events", "aggregate_sum", etc.
+	TimeRange    string `json:"timeRange"`    // "30d", "24h", etc.
 }
 
 // sanitizeKey removes any characters that could cause SQL injection in property key names
@@ -113,50 +122,180 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 		args = append(args, search)
 	}
 
-	// Parse and apply property filters
+	// Parse and apply filters
 	filtersJSON := c.Query("filters", "")
 	if filtersJSON != "" {
-		var filters []PropertyFilter
+		var filters []Filter
 		if err := json.Unmarshal([]byte(filtersJSON), &filters); err == nil {
 			for _, f := range filters {
-				if f.Property == "" || f.FilterType != "user_property" {
-					continue
-				}
-				switch f.Operator {
-				case "is":
-					baseQuery += fmt.Sprintf(" AND p.properties['%s'] = ?", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "is_not":
-					baseQuery += fmt.Sprintf(" AND p.properties['%s'] != ?", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "contains":
-					baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.properties['%s'], ?) > 0", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "does_not_contain":
-					baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.properties['%s'], ?) = 0", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "is_set":
-					baseQuery += fmt.Sprintf(" AND mapContains(p.properties, '%s')", sanitizeKey(f.Property))
-				case "is_not_set":
-					baseQuery += fmt.Sprintf(" AND NOT mapContains(p.properties, '%s')", sanitizeKey(f.Property))
-				case "gt":
-					baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "lt":
-					baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "gte":
-					baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "lte":
-					baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "eq":
-					baseQuery += fmt.Sprintf(" AND p.properties['%s'] = ?", sanitizeKey(f.Property))
-					args = append(args, f.Value)
-				case "neq":
-					baseQuery += fmt.Sprintf(" AND p.properties['%s'] != ?", sanitizeKey(f.Property))
-					args = append(args, f.Value)
+				
+				// --- User Property Filters ---
+				if f.FilterType == "user_property" {
+					if f.Property == "" {
+						continue
+					}
+					
+					valStr := fmt.Sprintf("%v", f.Value)
+
+					switch f.Operator {
+					case "is":
+						baseQuery += fmt.Sprintf(" AND p.properties['%s'] = ?", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "is_not":
+						baseQuery += fmt.Sprintf(" AND p.properties['%s'] != ?", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "contains":
+						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.properties['%s'], ?) > 0", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "does_not_contain":
+						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.properties['%s'], ?) = 0", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "is_set":
+						baseQuery += fmt.Sprintf(" AND mapContains(p.properties, '%s')", sanitizeKey(f.Property))
+					case "is_not_set":
+						baseQuery += fmt.Sprintf(" AND NOT mapContains(p.properties, '%s')", sanitizeKey(f.Property))
+					case "gt":
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "lt":
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "gte":
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "lte":
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "eq":
+						baseQuery += fmt.Sprintf(" AND p.properties['%s'] = ?", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "neq":
+						baseQuery += fmt.Sprintf(" AND p.properties['%s'] != ?", sanitizeKey(f.Property))
+						args = append(args, valStr)
+					case "in_last":
+						// Handle Date "in_last" logic: e.g. "7d"
+						// Assuming value is string like "7d", "24h"
+						// Check if property is a date string in ISO format?
+						// For simplicity, we might interpret Last Seen logic or just timestamp comparison
+						// But properties are strings. We need parseDateTimeBestEffort
+						durStr := valStr
+						var seconds int64
+						if len(durStr) > 0 {
+							val, _ := strconv.Atoi(durStr[:len(durStr)-1])
+							unit := durStr[len(durStr)-1]
+							if unit == 'h' { seconds = int64(val) * 3600 }
+							if unit == 'd' { seconds = int64(val) * 86400 }
+							if unit == 'm' { seconds = int64(val) * 60 } // minutes or months? Assuming minutes for simple parse, but UI usually sends 'd' or 'h'
+						}
+						if seconds > 0 {
+							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(p.properties['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
+							args = append(args, seconds)
+						}
+					}
+				} else if f.FilterType == "event" {
+					// --- Event Filters ---
+					// Users who DID / DID NOT do [Event] [Metric Operator Value] in [TimeRange]
+					
+					// 1. Calculate time range seconds
+					var timeSeconds int64 = 30 * 86400 // Default 30d
+					if f.TimeRange == "all" {
+						timeSeconds = 0
+					} else if len(f.TimeRange) > 0 {
+						val, _ := strconv.Atoi(f.TimeRange[:len(f.TimeRange)-1])
+						unit := f.TimeRange[len(f.TimeRange)-1]
+						switch unit {
+							case 'h': timeSeconds = int64(val) * 3600
+							case 'd': timeSeconds = int64(val) * 86400
+							case 'm': timeSeconds = int64(val) * 86400 * 30 // Approx month
+						}
+					}
+
+					// 2. Build Subquery for Events
+					// SELECT distinct_id FROM events WHERE ... GROUP BY distinct_id HAVING ...
+					
+					subQuery := `SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name = ?`
+					subArgs := []interface{}{projID, environment, f.EventName}
+
+					if timeSeconds > 0 {
+						subQuery += ` AND timestamp >= now() - INTERVAL ? SECOND`
+						subArgs = append(subArgs, timeSeconds)
+					}
+
+					// 3. Aggregation / Having Clause
+					havingClause := ""
+					metricOp := ""
+					
+					// Map operator string to SQL
+					switch f.Operator {
+					case "gt": metricOp = ">"
+					case "lt": metricOp = "<"
+					case "gte": metricOp = ">="
+					case "lte": metricOp = "<="
+					case "eq": metricOp = "="
+					case "neq": metricOp = "!="
+					default: metricOp = ">="
+					}
+
+					valFloat := 0.0
+					if v, ok := f.Value.(float64); ok {
+						valFloat = v
+					} else if v, ok := f.Value.(string); ok {
+						valFloat, _ = strconv.ParseFloat(v, 64)
+					}
+
+					// Determine Metric Expression
+					switch f.Metric {
+					case "total_events":
+						havingClause = fmt.Sprintf("count() %s ?", metricOp)
+						subArgs = append(subArgs, valFloat)
+					case "aggregate_sum":
+						if f.Property != "" {
+							havingClause = fmt.Sprintf("sum(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							subArgs = append(subArgs, valFloat)
+						}
+					case "aggregate_avg":
+						if f.Property != "" {
+							havingClause = fmt.Sprintf("avg(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							subArgs = append(subArgs, valFloat)
+						}
+					case "aggregate_min":
+						if f.Property != "" {
+							havingClause = fmt.Sprintf("min(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							subArgs = append(subArgs, valFloat)
+						}
+					case "aggregate_max":
+						if f.Property != "" {
+							havingClause = fmt.Sprintf("max(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							subArgs = append(subArgs, valFloat)
+						}
+					case "aggregate_distinct_count":
+						if f.Property != "" {
+							havingClause = fmt.Sprintf("uniqExact(properties['%s']) %s ?", sanitizeKey(f.Property), metricOp)
+							subArgs = append(subArgs, valFloat)
+						}
+					default:
+						// Default to total key count if metric unknown? or just count()
+						havingClause = fmt.Sprintf("count() %s ?", metricOp)
+						subArgs = append(subArgs, valFloat)
+					}
+					
+					if havingClause != "" {
+						subQuery += " GROUP BY distinct_id HAVING " + havingClause
+					} else {
+						// If no metric specified (rare), just existence
+						subQuery += " GROUP BY distinct_id" 
+					}
+
+					// 4. Apply to Main Query
+					if f.BehaviorType == "did" {
+						baseQuery += fmt.Sprintf(" AND p.distinct_id IN (%s)", subQuery)
+						args = append(args, subArgs...)
+					} else { // did_not
+						// BE CAREFUL: "Did not do X" usually means "Total events matching criteria is 0"
+						// OR "User is NOT IN the list of users who did X"
+						baseQuery += fmt.Sprintf(" AND p.distinct_id NOT IN (%s)", subQuery)
+						args = append(args, subArgs...)
+					}
 				}
 			}
 		} else {

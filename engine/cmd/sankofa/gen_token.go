@@ -1,6 +1,3 @@
-//go:build ignore
-// +build ignore
-
 package main
 
 import (
@@ -10,17 +7,17 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+var jwtSecret = []byte("super-secret-key-change-me")
+
 func main() {
-	secret := []byte("super-secret-key-change-me")
-	claims := jwt.MapClaims{
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": float64(1),
-		"email":   "user@example.com",
-		"exp":     time.Now().Add(time.Hour).Unix(),
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(secret)
+		"exp":     time.Now().Add(time.Hour * 24).Unix(),
+	})
+
+	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Print(signed)
+	fmt.Println(tokenString)
 }

@@ -44,6 +44,7 @@ func (h *EventsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 	events.Get("/names", h.GetEventNames)
 	events.Get("/counts", h.GetEventCounts)
 	events.Get("/values", h.GetEventValues)
+	events.Get("/properties", h.GetEventProperties) // New route
 	events.Get("/:id", h.GetEventDetail)
 }
 
