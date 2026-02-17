@@ -13,7 +13,7 @@ import (
 // GetEventProperties - GET /api/v1/events/properties
 func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 	projectIDStr := c.Query("project_id")
-	userID, ok := c.Locals("user_id").(float64)
+	userID, ok := c.Locals("user_id").(uint)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -46,17 +46,25 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 
 	// query event property keys
 	query := `
-		SELECT DISTINCT arrayJoin(mapKeys(properties)) AS key
-		FROM events
-		WHERE project_id = ? AND environment = ? AND event_name = ?
+		SELECT DISTINCT key 
+		FROM (
+			SELECT arrayJoin(mapKeys(properties)) AS key
+			FROM events
+			WHERE project_id = ? AND environment = ? AND event_name = ?
+			
+			UNION ALL
+			
+			SELECT arrayJoin(mapKeys(default_properties)) AS key
+			FROM events
+			WHERE project_id = ? AND environment = ? AND event_name = ?
+		) AS combined
 		ORDER BY key
 		LIMIT 1000
 	`
 
 	rows, err := h.CH.Query(context.Background(), query,
-		strconv.Itoa(int(project.ID)),
-		environment,
-		eventName,
+		strconv.Itoa(int(project.ID)), environment, eventName,
+		strconv.Itoa(int(project.ID)), environment, eventName,
 	)
 	if err != nil {
 		log.Println("ClickHouse Query Error:", err)

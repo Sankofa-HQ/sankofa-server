@@ -33,19 +33,19 @@ type PersonProfile struct {
 
 // Filter represents a unified filter from the frontend (user property or event)
 type Filter struct {
-	Id           string `json:"id"`
-	FilterType   string `json:"filterType"` // "user_property" or "event" or "cohort"
-	
+	Id         string `json:"id"`
+	FilterType string `json:"filterType"` // "user_property" or "event" or "cohort"
+
 	// User Property Fields
-	Property     string `json:"property"`
-	Operator     string `json:"operator"`
-	Value        interface{} `json:"value"` // Can be string or number
-	
+	Property string      `json:"property"`
+	Operator string      `json:"operator"`
+	Value    interface{} `json:"value"` // Can be string or number
+
 	// Event Filter Fields
 	BehaviorType string `json:"behaviorType"` // "did" or "did_not"
 	EventName    string `json:"eventName"`
-	Metric       string `json:"metric"`       // "total_events", "aggregate_sum", etc.
-	TimeRange    string `json:"timeRange"`    // "30d", "24h", etc.
+	Metric       string `json:"metric"`    // "total_events", "aggregate_sum", etc.
+	TimeRange    string `json:"timeRange"` // "30d", "24h", etc.
 }
 
 // sanitizeKey removes any characters that could cause SQL injection in property key names
@@ -122,19 +122,22 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 		args = append(args, search)
 	}
 
+	// DEBUG: log initial query
+	log.Printf("DEBUG: Initial BaseQuery: %s | Args: %v", baseQuery, args)
+
 	// Parse and apply filters
 	filtersJSON := c.Query("filters", "")
 	if filtersJSON != "" {
 		var filters []Filter
 		if err := json.Unmarshal([]byte(filtersJSON), &filters); err == nil {
 			for _, f := range filters {
-				
+
 				// --- User Property Filters ---
 				if f.FilterType == "user_property" {
 					if f.Property == "" {
 						continue
 					}
-					
+
 					valStr := fmt.Sprintf("%v", f.Value)
 
 					switch f.Operator {
@@ -183,9 +186,15 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						if len(durStr) > 0 {
 							val, _ := strconv.Atoi(durStr[:len(durStr)-1])
 							unit := durStr[len(durStr)-1]
-							if unit == 'h' { seconds = int64(val) * 3600 }
-							if unit == 'd' { seconds = int64(val) * 86400 }
-							if unit == 'm' { seconds = int64(val) * 60 } // minutes or months? Assuming minutes for simple parse, but UI usually sends 'd' or 'h'
+							if unit == 'h' {
+								seconds = int64(val) * 3600
+							}
+							if unit == 'd' {
+								seconds = int64(val) * 86400
+							}
+							if unit == 'm' {
+								seconds = int64(val) * 60
+							} // minutes or months? Assuming minutes for simple parse, but UI usually sends 'd' or 'h'
 						}
 						if seconds > 0 {
 							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(p.properties['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
@@ -195,7 +204,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 				} else if f.FilterType == "event" {
 					// --- Event Filters ---
 					// Users who DID / DID NOT do [Event] [Metric Operator Value] in [TimeRange]
-					
+
 					// 1. Calculate time range seconds
 					var timeSeconds int64 = 30 * 86400 // Default 30d
 					if f.TimeRange == "all" {
@@ -204,15 +213,18 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						val, _ := strconv.Atoi(f.TimeRange[:len(f.TimeRange)-1])
 						unit := f.TimeRange[len(f.TimeRange)-1]
 						switch unit {
-							case 'h': timeSeconds = int64(val) * 3600
-							case 'd': timeSeconds = int64(val) * 86400
-							case 'm': timeSeconds = int64(val) * 86400 * 30 // Approx month
+						case 'h':
+							timeSeconds = int64(val) * 3600
+						case 'd':
+							timeSeconds = int64(val) * 86400
+						case 'm':
+							timeSeconds = int64(val) * 86400 * 30 // Approx month
 						}
 					}
 
 					// 2. Build Subquery for Events
 					// SELECT distinct_id FROM events WHERE ... GROUP BY distinct_id HAVING ...
-					
+
 					subQuery := `SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name = ?`
 					subArgs := []interface{}{projID, environment, f.EventName}
 
@@ -224,16 +236,23 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 					// 3. Aggregation / Having Clause
 					havingClause := ""
 					metricOp := ""
-					
+
 					// Map operator string to SQL
 					switch f.Operator {
-					case "gt": metricOp = ">"
-					case "lt": metricOp = "<"
-					case "gte": metricOp = ">="
-					case "lte": metricOp = "<="
-					case "eq": metricOp = "="
-					case "neq": metricOp = "!="
-					default: metricOp = ">="
+					case "gt":
+						metricOp = ">"
+					case "lt":
+						metricOp = "<"
+					case "gte":
+						metricOp = ">="
+					case "lte":
+						metricOp = "<="
+					case "eq":
+						metricOp = "="
+					case "neq":
+						metricOp = "!="
+					default:
+						metricOp = ">="
 					}
 
 					valFloat := 0.0
@@ -244,33 +263,36 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 					}
 
 					// Determine Metric Expression
+					// We use mapUpdate to check both default_properties and properties. Custom properties override defaults.
+					propExpr := fmt.Sprintf("toFloat64OrZero(mapUpdate(default_properties, properties)['%s'])", sanitizeKey(f.Property))
+
 					switch f.Metric {
 					case "total_events":
 						havingClause = fmt.Sprintf("count() %s ?", metricOp)
 						subArgs = append(subArgs, valFloat)
 					case "aggregate_sum":
 						if f.Property != "" {
-							havingClause = fmt.Sprintf("sum(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							havingClause = fmt.Sprintf("sum(%s) %s ?", propExpr, metricOp)
 							subArgs = append(subArgs, valFloat)
 						}
 					case "aggregate_avg":
 						if f.Property != "" {
-							havingClause = fmt.Sprintf("avg(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							havingClause = fmt.Sprintf("avg(%s) %s ?", propExpr, metricOp)
 							subArgs = append(subArgs, valFloat)
 						}
 					case "aggregate_min":
 						if f.Property != "" {
-							havingClause = fmt.Sprintf("min(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							havingClause = fmt.Sprintf("min(%s) %s ?", propExpr, metricOp)
 							subArgs = append(subArgs, valFloat)
 						}
 					case "aggregate_max":
 						if f.Property != "" {
-							havingClause = fmt.Sprintf("max(toFloat64OrZero(properties['%s'])) %s ?", sanitizeKey(f.Property), metricOp)
+							havingClause = fmt.Sprintf("max(%s) %s ?", propExpr, metricOp)
 							subArgs = append(subArgs, valFloat)
 						}
 					case "aggregate_distinct_count":
 						if f.Property != "" {
-							havingClause = fmt.Sprintf("uniqExact(properties['%s']) %s ?", sanitizeKey(f.Property), metricOp)
+							havingClause = fmt.Sprintf("uniqExact(mapUpdate(default_properties, properties)['%s']) %s ?", sanitizeKey(f.Property), metricOp)
 							subArgs = append(subArgs, valFloat)
 						}
 					default:
@@ -278,12 +300,12 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						havingClause = fmt.Sprintf("count() %s ?", metricOp)
 						subArgs = append(subArgs, valFloat)
 					}
-					
+
 					if havingClause != "" {
 						subQuery += " GROUP BY distinct_id HAVING " + havingClause
 					} else {
 						// If no metric specified (rare), just existence
-						subQuery += " GROUP BY distinct_id" 
+						subQuery += " GROUP BY distinct_id"
 					}
 
 					// 4. Apply to Main Query
@@ -291,15 +313,13 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						baseQuery += fmt.Sprintf(" AND p.distinct_id IN (%s)", subQuery)
 						args = append(args, subArgs...)
 					} else { // did_not
-						// BE CAREFUL: "Did not do X" usually means "Total events matching criteria is 0"
-						// OR "User is NOT IN the list of users who did X"
 						baseQuery += fmt.Sprintf(" AND p.distinct_id NOT IN (%s)", subQuery)
 						args = append(args, subArgs...)
 					}
 				}
 			}
 		} else {
-			log.Println("Failed to parse property filters:", err)
+			log.Println("Failed to parse filters:", err)
 		}
 	}
 
@@ -309,6 +329,9 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 		LIMIT ? OFFSET ?
 	`
 	args = append(args, limit, offset)
+
+	// DEBUG: log final query
+	log.Printf("DEBUG: Final BaseQuery: %s | Args: %v", baseQuery, args)
 
 	rows, err := h.CH.Query(context.Background(), baseQuery, args...)
 	if err != nil {
