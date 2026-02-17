@@ -136,10 +136,24 @@ func main() {
 	seedDefaultSuperAdmin(db)
 
 	// 3. INIT CLICKHOUSE (The Muscle)
-	chConn, err := connectClickHouse()
-	if err != nil {
-		log.Fatal("❌ ClickHouse connect failed:", err)
+	var chConn driver.Conn
+
+	for i := 0; i < 10; i++ {
+		chConn, err = connectClickHouse()
+		if err == nil {
+			// Ping to check actual connectivity
+			if err = chConn.Ping(context.Background()); err == nil {
+				log.Println("✅ Connected to ClickHouse")
+				break
+			}
+		}
+		log.Printf("⚠️ ClickHouse connect failed (attempt %d/10): %v. Retrying in 2s...", i+1, err)
+		time.Sleep(2 * time.Second)
 	}
+	if err != nil {
+		log.Fatal("❌ ClickHouse unavailable after 10 attempts:", err)
+	}
+
 	initClickHouseSchema(chConn)
 
 	// 4. START WORKERS
@@ -181,6 +195,8 @@ func main() {
 
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
 	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Events under /api/v1/events
+	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
+	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
 	v1.Get("/people/:id", middleware.RequireAuth, peopleHandler.GetPerson)
 
