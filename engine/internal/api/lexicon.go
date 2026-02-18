@@ -117,22 +117,36 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 
 func (h *LexiconHandler) UpdateEvent(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var input database.LexiconEvent
-	if err := c.BodyParser(&input); err != nil {
+
+	// Parse raw JSON to only update fields that were actually sent
+	var body map[string]interface{}
+	if err := c.BodyParser(&body); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
-	// Update allowed fields
-	result := h.DB.Model(&database.LexiconEvent{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"display_name": input.DisplayName,
-		"description":  input.Description,
-		"hidden":       input.Hidden,
-		"dropped":      input.Dropped,
-		"tags":         input.Tags,
-		"updated_at":   time.Now(),
-	})
+	updates := map[string]interface{}{"updated_at": time.Now()}
 
+	if v, ok := body["display_name"]; ok {
+		updates["display_name"] = v
+	}
+	if v, ok := body["description"]; ok {
+		updates["description"] = v
+	}
+	if v, ok := body["hidden"]; ok {
+		updates["hidden"] = v
+	}
+	if v, ok := body["dropped"]; ok {
+		updates["dropped"] = v
+	}
+	if v, ok := body["tags"]; ok {
+		tagsVal, _ := toStringArray(v)
+		serialised, _ := tagsVal.Value()
+		updates["tags"] = serialised
+	}
+
+	result := h.DB.Model(&database.LexiconEvent{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
+		log.Println("❌ Update Event Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
 	}
 
@@ -215,23 +229,41 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 
 func (h *LexiconHandler) UpdateEventProperty(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var input database.LexiconEventProperty
-	if err := c.BodyParser(&input); err != nil {
+
+	var body map[string]interface{}
+	if err := c.BodyParser(&body); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
-	result := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"display_name":  input.DisplayName,
-		"description":   input.Description,
-		"example_value": input.ExampleValue,
-		"hidden":        input.Hidden,
-		"dropped":       input.Dropped,
-		"tags":          input.Tags,
-		"type":          input.Type,
-		"updated_at":    time.Now(),
-	})
+	updates := map[string]interface{}{"updated_at": time.Now()}
 
+	if v, ok := body["display_name"]; ok {
+		updates["display_name"] = v
+	}
+	if v, ok := body["description"]; ok {
+		updates["description"] = v
+	}
+	if v, ok := body["example_value"]; ok {
+		updates["example_value"] = v
+	}
+	if v, ok := body["hidden"]; ok {
+		updates["hidden"] = v
+	}
+	if v, ok := body["dropped"]; ok {
+		updates["dropped"] = v
+	}
+	if v, ok := body["type"]; ok {
+		updates["type"] = v
+	}
+	if v, ok := body["tags"]; ok {
+		tagsVal, _ := toStringArray(v)
+		serialised, _ := tagsVal.Value()
+		updates["tags"] = serialised
+	}
+
+	result := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
+		log.Println("❌ Update Event Property Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
 	}
 	return c.JSON(fiber.Map{"success": true})
@@ -304,23 +336,41 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 
 func (h *LexiconHandler) UpdateProfileProperty(c *fiber.Ctx) error {
 	id := c.Params("id")
-	var input database.LexiconProfileProperty
-	if err := c.BodyParser(&input); err != nil {
+
+	var body map[string]interface{}
+	if err := c.BodyParser(&body); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
-	result := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"display_name":  input.DisplayName,
-		"description":   input.Description,
-		"example_value": input.ExampleValue,
-		"hidden":        input.Hidden,
-		"dropped":       input.Dropped,
-		"tags":          input.Tags,
-		"type":          input.Type,
-		"updated_at":    time.Now(),
-	})
+	updates := map[string]interface{}{"updated_at": time.Now()}
 
+	if v, ok := body["display_name"]; ok {
+		updates["display_name"] = v
+	}
+	if v, ok := body["description"]; ok {
+		updates["description"] = v
+	}
+	if v, ok := body["example_value"]; ok {
+		updates["example_value"] = v
+	}
+	if v, ok := body["hidden"]; ok {
+		updates["hidden"] = v
+	}
+	if v, ok := body["dropped"]; ok {
+		updates["dropped"] = v
+	}
+	if v, ok := body["type"]; ok {
+		updates["type"] = v
+	}
+	if v, ok := body["tags"]; ok {
+		tagsVal, _ := toStringArray(v)
+		serialised, _ := tagsVal.Value()
+		updates["tags"] = serialised
+	}
+
+	result := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
+		log.Println("❌ Update Profile Property Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
 	}
 	return c.JSON(fiber.Map{"success": true})
@@ -360,6 +410,25 @@ func (h *LexiconHandler) getProjectFromContext(c *fiber.Ctx) (*database.Project,
 		}
 	}
 	return &project, nil
+}
+
+// toStringArray converts a JSON-parsed interface{} (typically []interface{}) to our StringArray.
+func toStringArray(v interface{}) (database.StringArray, error) {
+	result := database.StringArray{}
+	if v == nil {
+		return result, nil
+	}
+	switch arr := v.(type) {
+	case []interface{}:
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+	case []string:
+		result = database.StringArray(arr)
+	}
+	return result, nil
 }
 
 // getNameFromKey "signup_completed" -> "Signup Completed"
