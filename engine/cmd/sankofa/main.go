@@ -128,6 +128,9 @@ func main() {
 		&database.TeamMember{},
 		&database.TeamProject{},
 		&database.Plan{}, // Added Plan
+		&database.LexiconEvent{},
+		&database.LexiconEventProperty{},
+		&database.LexiconProfileProperty{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}
@@ -185,6 +188,7 @@ func main() {
 	orgHandler := api.NewOrganizationHandler(db, chConn) // New
 	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
 	peopleHandler := api.NewPeopleHandler(db, chConn)    // People
+	lexiconHandler := api.NewLexiconHandler(db, chConn)  // Lexicon
 	middleware := middleware.NewAuthMiddleware(db)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -194,7 +198,8 @@ func main() {
 	// protected.Use(middleware.RequireAuth)
 
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
-	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Events under /api/v1/events
+	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)  // Events under /api/v1/events
+	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth) // Lexicon under /api/v1/lexicon
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
