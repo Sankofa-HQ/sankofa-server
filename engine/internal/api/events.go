@@ -413,33 +413,19 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 		}
 	}
 
-	environment := c.Query("environment", "live")
-
-	// Get unique event names
-	query := `
-		SELECT DISTINCT event_name
-		FROM events
-		WHERE tenant_id = ? AND environment = ?
-		ORDER BY event_name
-	`
-
-	rows, err := h.CH.Query(context.Background(), query,
-		strconv.Itoa(int(project.ID)),
-		environment,
-	)
-	if err != nil {
-		log.Println("ClickHouse Query Error:", err)
+	// Fetch from Lexicon (SQLite) - The "Gatekeeper" source of truth
+	var lexiconEvents []database.LexiconEvent
+	if err := h.DB.Model(&database.LexiconEvent{}).
+		Where("project_id = ? AND hidden = ?", project.ID, false).
+		Order("name ASC").
+		Find(&lexiconEvents).Error; err != nil {
+		log.Println("Lexicon Query Error:", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to query event names"})
 	}
-	defer rows.Close()
 
 	var eventNames []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			continue
-		}
-		eventNames = append(eventNames, name)
+	for _, e := range lexiconEvents {
+		eventNames = append(eventNames, e.Name)
 	}
 
 	return c.JSON(fiber.Map{

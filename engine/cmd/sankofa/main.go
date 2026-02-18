@@ -135,6 +135,9 @@ func main() {
 		log.Fatal("❌ Migration failed:", err)
 	}
 
+	// INIT LEXICON GATEKEEPER (Cache + Async Queue)
+	database.InitLexiconStore(db)
+
 	seedDefaultPlans(db) // Seed Plans before Admin
 	seedDefaultSuperAdmin(db)
 
@@ -303,6 +306,17 @@ func main() {
 		e.OrganizationID = fmt.Sprint(project.OrganizationID)
 		e.Environment = environment
 		e.Timestamp = time.Now()
+
+		// --- LEXICON GATEKEEPER START ---
+		// Async register event name & properties
+		if database.Store != nil {
+			props := make(map[string]interface{})
+			for k, v := range e.Properties {
+				props[k] = v
+			}
+			database.Store.TrackEvent(e.ProjectID, e.EventName, props)
+		}
+		// --- LEXICON GATEKEEPER END ---
 
 		select {
 		case eventStream <- e:
