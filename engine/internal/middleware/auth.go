@@ -14,15 +14,19 @@ import (
 
 // AuthMiddleware holds dependencies
 type AuthMiddleware struct {
-	DB *gorm.DB
+	DB     *gorm.DB
+	Secret []byte
 }
 
-func NewAuthMiddleware(db *gorm.DB) *AuthMiddleware {
-	return &AuthMiddleware{DB: db}
+func NewAuthMiddleware(db *gorm.DB, secret string) *AuthMiddleware {
+	if secret == "" {
+		secret = "super-secret-key-change-me"
+	}
+	return &AuthMiddleware{
+		DB:     db,
+		Secret: []byte(secret),
+	}
 }
-
-// Secret key (duplicate of auth.go for now, should be shared)
-var jwtSecret = []byte("super-secret-key-change-me")
 
 // RequireAuth checks for valid user session (JWT)
 func (m *AuthMiddleware) RequireAuth(c *fiber.Ctx) error {
@@ -41,7 +45,7 @@ func (m *AuthMiddleware) RequireAuth(c *fiber.Ctx) error {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return jwtSecret, nil
+		return m.Secret, nil
 	})
 
 	if err != nil || !token.Valid {

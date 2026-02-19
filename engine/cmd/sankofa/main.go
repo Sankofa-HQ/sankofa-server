@@ -199,7 +199,7 @@ func main() {
 	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
 	peopleHandler := api.NewPeopleHandler(db, chConn)    // People
 	lexiconHandler := api.NewLexiconHandler(db, chConn)  // Lexicon
-	middleware := middleware.NewAuthMiddleware(db)
+	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
 
