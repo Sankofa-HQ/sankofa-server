@@ -175,7 +175,31 @@ func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
 		}()
 	}
 
-	return c.Status(201).JSON(cohort)
+	// Reload to get CreatedBy User
+	h.DB.Preload("CreatedBy").First(&cohort, cohort.ID)
+
+	creatorName := "Team"
+	if cohort.CreatedBy != nil {
+		creatorName = cohort.CreatedBy.FullName
+		if creatorName == "" {
+			creatorName = cohort.CreatedBy.Email
+		}
+	}
+
+	// Build enriched response
+	res := fiber.Map{
+		"id":            cohort.ID,
+		"name":          cohort.Name,
+		"description":   cohort.Description,
+		"type":          cohort.Type,
+		"rules":         string(cohort.Rules),
+		"created_at":    cohort.CreatedAt.Format("Jan 02, 2006"),
+		"updated_at":    cohort.UpdatedAt.Format("Jan 02, 2006"),
+		"created_by_id": cohort.CreatedByID,
+		"creator_name":  creatorName,
+	}
+
+	return c.Status(201).JSON(res)
 }
 
 func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
