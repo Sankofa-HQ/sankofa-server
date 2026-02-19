@@ -350,6 +350,12 @@ func generateAPIKey() (string, error) {
 // Secret key for JWT (Should be in env)
 var jwtSecret = []byte("super-secret-key-change-me")
 
+func SetJWTSecret(secret string) {
+	if secret != "" {
+		jwtSecret = []byte(secret)
+	}
+}
+
 func generateJWT(userID uint, email string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,

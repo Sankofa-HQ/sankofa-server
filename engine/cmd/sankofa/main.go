@@ -31,14 +31,16 @@ var frontend embed.FS
 
 // --- CONFIG ---
 var (
-	BUFFER_SIZE     = 10000
-	FLUSH_INTERVAL  = 2 * time.Second
-	BATCH_SIZE      = 1000
-	SQLITE_FILE     string
-	CLICKHOUSE_ADDR string
-	CLICKHOUSE_USER string
-	CLICKHOUSE_PASS string
-	APP_PORT        string
+	BUFFER_SIZE          = 10000
+	FLUSH_INTERVAL       = 2 * time.Second
+	BATCH_SIZE           = 1000
+	SQLITE_FILE          string
+	CLICKHOUSE_ADDR      string
+	CLICKHOUSE_USER      string
+	CLICKHOUSE_PASS      string
+	APP_PORT             string
+	CORS_ALLOWED_ORIGINS string
+	API_SECRET           string
 )
 
 func loadConfig() {
@@ -57,6 +59,8 @@ func loadConfig() {
 	CLICKHOUSE_USER = getEnv("CLICKHOUSE_USER", "default")
 	CLICKHOUSE_PASS = getEnv("CLICKHOUSE_PASSWORD", "")
 	APP_PORT = getEnv("APP_PORT", "8080")
+	CORS_ALLOWED_ORIGINS = getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+	API_SECRET = getEnv("API_SECRET", "super-secret-key-change-me")
 }
 
 func getEnv(key, fallback string) string {
@@ -116,6 +120,9 @@ func main() {
 	if err != nil {
 		log.Fatal("❌ SQLite connect failed:", err)
 	}
+
+	// 4. INIT AUTH SECRET
+	api.SetJWTSecret(API_SECRET)
 
 	// MIGRATIONS
 	if err := db.AutoMigrate(
@@ -177,7 +184,7 @@ func main() {
 		DisableStartupMessage: true,
 	})
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000",
+		AllowOrigins:     CORS_ALLOWED_ORIGINS,
 		AllowCredentials: true,
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id", // Added x-project-id
 	}))
