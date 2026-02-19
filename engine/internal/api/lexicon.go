@@ -161,9 +161,38 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	var props []database.LexiconEventProperty
-	if err := h.DB.Where("project_id = ?", project.ID).Find(&props).Error; err != nil {
+	var allProps []database.LexiconEventProperty
+	if err := h.DB.Where("project_id = ?", project.ID).Find(&allProps).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "DB Error"})
+	}
+
+	// Deduplicate properties: Prioritize Global (EventID == nil)
+	propMap := make(map[string]database.LexiconEventProperty)
+	for _, p := range allProps {
+		existing, found := propMap[p.Name]
+		if !found {
+			propMap[p.Name] = p
+		} else {
+			// If current p is Global (EventID is nil), it overwrites existing
+			// If existing is NOT global but p is, p wins.
+			// (Note: *uint is nil for global)
+			if p.EventID == nil {
+				propMap[p.Name] = p
+			} else if existing.EventID != nil {
+				// Both are per-event. Prefer one with a display name?
+				// For now, keep existing (first found).
+				// Or merge?
+				if p.DisplayName != "" && existing.DisplayName == "" {
+					propMap[p.Name] = p
+				}
+			}
+		}
+	}
+
+	// Convert map back to slice
+	var props []database.LexiconEventProperty
+	for _, p := range propMap {
+		props = append(props, p)
 	}
 
 	// Sync with ClickHouse

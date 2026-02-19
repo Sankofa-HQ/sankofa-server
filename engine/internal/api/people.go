@@ -573,22 +573,80 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Person not found"})
 	}
 
-	// Clean aliases and resolve display_id
-	var cleanAliases []string
-	for _, a := range p.Aliases {
-		if a != "" {
-			cleanAliases = append(cleanAliases, a)
-		}
-	}
-	p.Aliases = cleanAliases
-	if p.Aliases == nil {
-		p.Aliases = []string{}
-	}
-
-	// Resolve display_id: follow alias chain forward to find the latest identity
+	// 4. Resolve display_id: follow alias chain forward to find the latest identity
 	p.DisplayID = h.resolveDisplayID(projID, environment, p.DistinctID)
 
+	// 5. Resolve ALL aliases for this person (recursive chain) to populate p.Aliases
+	// The initial query only gets aliases linked to the *canonical* ID, which might miss some hops.
+	allIDs := h.resolveAllAliasedIDs(projID, environment, canonicalID)
+
+	// Filter out the main distinct_id and display_id from the aliases list
+	seenAliases := make(map[string]bool)
+	var finalAliases []string
+
+	for _, id := range allIDs {
+		// Don't include the main ID or display ID in the aliases list
+		if id != p.DistinctID && id != p.DisplayID {
+			if !seenAliases[id] {
+				seenAliases[id] = true
+				finalAliases = append(finalAliases, id)
+			}
+		}
+	}
+	p.Aliases = finalAliases
+
 	return c.JSON(fiber.Map{"data": p})
+}
+
+// resolveAllAliasedIDs collects all distinct_ids that belong to the same person
+// by following the alias chain in both directions.
+// Mirrors the logic in EventsHandler.
+func (h *PeopleHandler) resolveAllAliasedIDs(projID, environment, startID string) []string {
+	allIDs := map[string]bool{startID: true}
+	queue := []string{startID}
+
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+
+		// Forward: currentID is alias_id -> find distinct_id
+		rows, err := h.CH.Query(context.Background(),
+			"SELECT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ?",
+			projID, environment, currentID,
+		)
+		if err == nil {
+			for rows.Next() {
+				var did string
+				if rows.Scan(&did) == nil && !allIDs[did] {
+					allIDs[did] = true
+					queue = append(queue, did)
+				}
+			}
+			rows.Close()
+		}
+
+		// Backward: currentID is distinct_id -> find alias_id
+		rows2, err := h.CH.Query(context.Background(),
+			"SELECT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ?",
+			projID, environment, currentID,
+		)
+		if err == nil {
+			for rows2.Next() {
+				var aid string
+				if rows2.Scan(&aid) == nil && !allIDs[aid] {
+					allIDs[aid] = true
+					queue = append(queue, aid)
+				}
+			}
+			rows2.Close()
+		}
+	}
+
+	result := make([]string, 0, len(allIDs))
+	for id := range allIDs {
+		result = append(result, id)
+	}
+	return result
 }
 
 // GetPropertyKeys - GET /api/v1/people/properties/keys
