@@ -185,11 +185,50 @@ func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
 	}
 
 	var cohorts []database.Cohort
-	if err := h.DB.Where("project_id = ?", projectID).Find(&cohorts).Error; err != nil {
+	if err := h.DB.Preload("CreatedBy").Where("project_id = ?", projectID).Order("created_at DESC").Find(&cohorts).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch cohorts"})
 	}
 
-	return c.JSON(cohorts)
+	// Build enriched response
+	type CohortResponse struct {
+		ID          uint   `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Type        string `json:"type"`
+		Rules       string `json:"rules"`
+		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
+		CreatedByID uint   `json:"created_by_id"`
+		CreatorName string `json:"creator_name"`
+	}
+
+	var result []CohortResponse
+	for _, c := range cohorts {
+		creatorName := "Team"
+		if c.CreatedBy != nil {
+			creatorName = c.CreatedBy.FullName
+			if creatorName == "" {
+				creatorName = c.CreatedBy.Email
+			}
+		}
+		result = append(result, CohortResponse{
+			ID:          c.ID,
+			Name:        c.Name,
+			Description: c.Description,
+			Type:        c.Type,
+			Rules:       string(c.Rules),
+			CreatedAt:   c.CreatedAt.Format("Jan 02, 2006"),
+			UpdatedAt:   c.UpdatedAt.Format("Jan 02, 2006"),
+			CreatedByID: c.CreatedByID,
+			CreatorName: creatorName,
+		})
+	}
+
+	if result == nil {
+		result = []CohortResponse{}
+	}
+
+	return c.JSON(result)
 }
 
 func (h *CohortsHandler) GetCohort(c *fiber.Ctx) error {

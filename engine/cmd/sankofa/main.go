@@ -220,6 +220,7 @@ func main() {
 	cohortsHandler := api.NewCohortsHandler(db, chConn)
 	v1.Post("/cohorts", middleware.RequireAuth, cohortsHandler.CreateCohort)
 	v1.Get("/cohorts", middleware.RequireAuth, cohortsHandler.ListCohorts)
+	v1.Post("/cohorts/preview", middleware.RequireAuth, cohortsHandler.PreviewCohort)
 	v1.Get("/cohorts/:id", middleware.RequireAuth, cohortsHandler.GetCohort)
 	v1.Delete("/cohorts/:id", middleware.RequireAuth, cohortsHandler.DeleteCohort)
 	v1.Post("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.AddMembers)

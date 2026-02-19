@@ -512,12 +512,36 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 		Order("name ASC").
 		Find(&lexiconEvents).Error; err != nil {
 		log.Println("Lexicon Query Error:", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to query event names"})
 	}
 
 	var eventNames []string
 	for _, e := range lexiconEvents {
 		eventNames = append(eventNames, e.Name)
+	}
+
+	// Fallback: if Lexicon is empty, query ClickHouse directly
+	if len(eventNames) == 0 {
+		projID := strconv.Itoa(int(project.ID))
+		environment := c.Query("environment", "live")
+		rows, err := h.CH.Query(context.Background(),
+			"SELECT DISTINCT event_name FROM events WHERE tenant_id = ? AND environment = ? ORDER BY event_name",
+			projID, environment,
+		)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var name string
+				if rows.Scan(&name) == nil && name != "" {
+					eventNames = append(eventNames, name)
+				}
+			}
+		} else {
+			log.Println("ClickHouse fallback event names error:", err)
+		}
+	}
+
+	if eventNames == nil {
+		eventNames = []string{}
 	}
 
 	return c.JSON(fiber.Map{
