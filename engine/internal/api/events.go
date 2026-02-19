@@ -357,6 +357,36 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							}
 						}
 					}
+
+					// Special Cohort Handling (Type == "cohort")
+					if f.Type == "cohort" {
+						cohortIDStr := f.Value
+						var cohort database.Cohort
+						if err := h.DB.First(&cohort, cohortIDStr).Error; err == nil {
+							var cohortSQL string
+							var cohortArgs []interface{}
+
+							if cohort.Type == "static" {
+								cohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
+								cohortID, _ := strconv.Atoi(cohortIDStr)
+								cohortArgs = []interface{}{projID, cohortID}
+							} else {
+								var ast CohortAST
+								if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
+									cohortSQL, cohortArgs = BuildCohortSQL(projID, ast)
+								}
+							}
+
+							if cohortSQL != "" {
+								if f.Operator == "is_not" || f.Operator == "!=" {
+									andClauses = append(andClauses, fmt.Sprintf("distinct_id NOT IN (%s)", cohortSQL))
+								} else {
+									andClauses = append(andClauses, fmt.Sprintf("distinct_id IN (%s)", cohortSQL))
+								}
+								queryArgs = append(queryArgs, cohortArgs...)
+							}
+						}
+					}
 				}
 			}
 

@@ -138,6 +138,7 @@ func main() {
 		&database.LexiconEvent{},
 		&database.LexiconEventProperty{},
 		&database.LexiconProfileProperty{},
+		&database.Cohort{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}
@@ -199,7 +200,7 @@ func main() {
 	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
 	peopleHandler := api.NewPeopleHandler(db, chConn)    // People
 	lexiconHandler := api.NewLexiconHandler(db, chConn)  // Lexicon
-	middleware := middleware.NewAuthMiddleware(db)
+	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
 
@@ -214,6 +215,15 @@ func main() {
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
 	v1.Get("/people/:id", middleware.RequireAuth, peopleHandler.GetPerson)
+
+	// Cohorts
+	cohortsHandler := api.NewCohortsHandler(db, chConn)
+	v1.Post("/cohorts", middleware.RequireAuth, cohortsHandler.CreateCohort)
+	v1.Get("/cohorts", middleware.RequireAuth, cohortsHandler.ListCohorts)
+	v1.Get("/cohorts/:id", middleware.RequireAuth, cohortsHandler.GetCohort)
+	v1.Delete("/cohorts/:id", middleware.RequireAuth, cohortsHandler.DeleteCohort)
+	v1.Post("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.AddMembers)
+	v1.Delete("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.RemoveMembers)
 
 	apiRouter.Post("/orgs", middleware.RequireAuth, orgHandler.CreateOrganization)
 	apiRouter.Post("/upload", middleware.RequireAuth, api.UploadHandler) // Upload Endpoint
@@ -606,6 +616,20 @@ func initClickHouseSchema(conn driver.Conn) {
 		for _, col := range cols {
 			_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s String", table, col))
 		}
+	}
+
+	// 4. Cohort Static Members (CollapsingMergeTree)
+	err = conn.Exec(ctx, `
+	CREATE TABLE IF NOT EXISTS cohort_static_members (
+		project_id UInt64,
+		cohort_id UInt64,
+		distinct_id String,
+		sign Int8
+	) ENGINE = CollapsingMergeTree(sign)
+	ORDER BY (project_id, cohort_id, distinct_id)
+	`)
+	if err != nil {
+		log.Fatal("ClickHouse Init Error (Cohorts):", err)
 	}
 }
 

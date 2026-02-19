@@ -99,3 +99,18 @@ type Plan struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
+
+// Cohort represents a user group (Dynamic or Static)
+type Cohort struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	ProjectID   uint      `gorm:"not null;index" json:"project_id"`
+	Name        string    `gorm:"not null" json:"name"`
+	Description string    `json:"description"`
+	Type        string    `json:"type"` // "dynamic" or "static"
+	Rules       []byte    `gorm:"type:text" json:"rules"`
+	IsVisible   bool      `gorm:"default:true" json:"is_visible"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	CreatedByID uint      `json:"created_by_id"`
+	CreatedBy   *User     `json:"created_by" gorm:"foreignKey:CreatedByID"`
+}

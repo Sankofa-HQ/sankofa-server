@@ -355,6 +355,40 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						baseQuery += fmt.Sprintf(" AND p.distinct_id NOT IN (%s)", subQuery)
 						args = append(args, subArgs...)
 					}
+				} else if f.FilterType == "cohort" {
+					// --- Cohort Filters ---
+					cohortIDStr := fmt.Sprintf("%v", f.Value)
+					var cohort database.Cohort
+					if err := h.DB.First(&cohort, cohortIDStr).Error; err != nil {
+						log.Println("Cohort not found:", cohortIDStr)
+						continue
+					}
+
+					var cohortSQL string
+					var cohortArgs []interface{}
+
+					if cohort.Type == "static" {
+						// Static Cohort: Use ClickHouse table with CollapsingMergeTree logic
+						cohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
+						cohortArgs = []interface{}{projID, cohort.ID}
+					} else {
+						// Dynamic Cohort: Parse AST and Build SQL
+						var ast CohortAST
+						if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
+							cohortSQL, cohortArgs = BuildCohortSQL(projID, ast)
+						} else {
+							log.Println("Failed to parse cohort rules:", err)
+						}
+					}
+
+					if cohortSQL != "" {
+						if f.BehaviorType == "did_not" { // exclude cohort (rare but possible)
+							baseQuery += fmt.Sprintf(" AND p.distinct_id NOT IN (%s)", cohortSQL)
+						} else {
+							baseQuery += fmt.Sprintf(" AND p.distinct_id IN (%s)", cohortSQL)
+						}
+						args = append(args, cohortArgs...)
+					}
 				}
 			}
 		} else {
