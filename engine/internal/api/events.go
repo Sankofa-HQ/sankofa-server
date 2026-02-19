@@ -48,6 +48,57 @@ func (h *EventsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 	events.Get("/:id", h.GetEventDetail)
 }
 
+// resolveAllAliasedIDs collects all distinct_ids that belong to the same person
+// by following the alias chain in both directions.
+// Given any ID in the chain, it returns [anonymous_uuid, user_532, user_304, user_80]
+func (h *EventsHandler) resolveAllAliasedIDs(projID, environment, startID string) []string {
+	allIDs := map[string]bool{startID: true}
+	queue := []string{startID}
+
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+
+		// Forward: currentID is alias_id → find distinct_id
+		rows, err := h.CH.Query(context.Background(),
+			"SELECT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ?",
+			projID, environment, currentID,
+		)
+		if err == nil {
+			for rows.Next() {
+				var did string
+				if rows.Scan(&did) == nil && !allIDs[did] {
+					allIDs[did] = true
+					queue = append(queue, did)
+				}
+			}
+			rows.Close()
+		}
+
+		// Backward: currentID is distinct_id → find alias_id
+		rows2, err := h.CH.Query(context.Background(),
+			"SELECT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ?",
+			projID, environment, currentID,
+		)
+		if err == nil {
+			for rows2.Next() {
+				var aid string
+				if rows2.Scan(&aid) == nil && !allIDs[aid] {
+					allIDs[aid] = true
+					queue = append(queue, aid)
+				}
+			}
+			rows2.Close()
+		}
+	}
+
+	result := make([]string, 0, len(allIDs))
+	for id := range allIDs {
+		result = append(result, id)
+	}
+	return result
+}
+
 // ListEvents - GET /api/v1/events
 func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	userID, ok := c.Locals("user_id").(uint)
@@ -98,8 +149,19 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	queryArgs := []interface{}{projID, environment}
 
 	if distinctID != "" {
-		whereClause += " AND distinct_id = ?"
-		queryArgs = append(queryArgs, distinctID)
+		// Resolve all related IDs through the alias chain to find ALL events for this user
+		allIDs := h.resolveAllAliasedIDs(projID, environment, distinctID)
+		if len(allIDs) == 1 {
+			whereClause += " AND distinct_id = ?"
+			queryArgs = append(queryArgs, allIDs[0])
+		} else {
+			placeholders := make([]string, len(allIDs))
+			for i := range allIDs {
+				placeholders[i] = "?"
+				queryArgs = append(queryArgs, allIDs[i])
+			}
+			whereClause += " AND distinct_id IN (" + strings.Join(placeholders, ",") + ")"
+		}
 	}
 	if startTime != "" {
 		whereClause += " AND timestamp >= parseDateTimeBestEffort(?)"

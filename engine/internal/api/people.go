@@ -26,6 +26,7 @@ func NewPeopleHandler(db *gorm.DB, ch driver.Conn) *PeopleHandler {
 
 type PersonProfile struct {
 	DistinctID string            `json:"distinct_id"`
+	DisplayID  string            `json:"display_id"` // The latest user-facing identity
 	Properties map[string]string `json:"properties"`
 	LastSeen   time.Time         `json:"last_seen"`
 	Aliases    []string          `json:"aliases"`
@@ -58,6 +59,29 @@ func sanitizeKey(key string) string {
 		}
 	}
 	return string(result)
+}
+
+// resolveDisplayID follows the alias chain FORWARD to find the latest user-facing identity.
+// The alias table stores: alias_id = previousID, distinct_id = newUserID
+// So starting from the anonymous UUID, we follow alias_id → distinct_id to get the latest ID.
+func (h *PeopleHandler) resolveDisplayID(projID, environment, canonicalID string) string {
+	currentID := canonicalID
+	visited := map[string]bool{currentID: true}
+
+	for i := 0; i < 10; i++ {
+		var nextID string
+		err := h.CH.QueryRow(context.Background(),
+			"SELECT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ? LIMIT 1",
+			projID, environment, currentID,
+		).Scan(&nextID)
+
+		if err != nil || nextID == "" || visited[nextID] {
+			break
+		}
+		visited[nextID] = true
+		currentID = nextID
+	}
+	return currentID
 }
 
 // ListPeople - GET /api/v1/people
@@ -102,24 +126,39 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	projID := strconv.Itoa(int(project.ID))
 
 	// 2. Build ClickHouse Query
+	// Use a subquery with argMax to deduplicate ReplacingMergeTree rows
+	// This ensures we get only the latest profile per distinct_id
 	baseQuery := `
 		SELECT 
 			p.distinct_id,
-			p.properties,
-			p.last_seen,
+			p.props AS properties,
+			p.latest_seen AS last_seen,
 			groupArray(pa.alias_id) as aliases
-		FROM persons p
+		FROM (
+			SELECT 
+				distinct_id,
+				argMax(properties, last_seen) AS props,
+				max(last_seen) AS latest_seen
+			FROM persons
+			WHERE project_id = ? AND environment = ?
+			GROUP BY distinct_id
+		) p
 		LEFT JOIN person_aliases pa 
-			ON p.distinct_id = pa.distinct_id 
-			AND p.project_id = pa.project_id 
-			AND p.environment = pa.environment
-		WHERE p.project_id = ? AND p.environment = ?
+			ON p.distinct_id = pa.distinct_id
+		WHERE 1=1
 	`
 	args := []interface{}{projID, environment}
 
 	if search != "" {
-		baseQuery += " AND (positionCaseInsensitive(p.distinct_id, ?) > 0)"
-		args = append(args, search)
+		// Search both distinct_id and aliases (resolve alias -> distinct_id)
+		baseQuery += ` AND (
+			positionCaseInsensitive(p.distinct_id, ?) > 0 
+			OR p.distinct_id IN (
+				SELECT alias_id FROM person_aliases 
+				WHERE positionCaseInsensitive(distinct_id, ?) > 0
+			)
+		)`
+		args = append(args, search, search)
 	}
 
 	// DEBUG: log initial query
@@ -142,38 +181,38 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 
 					switch f.Operator {
 					case "is":
-						baseQuery += fmt.Sprintf(" AND p.properties['%s'] = ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND p.props['%s'] = ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "is_not":
-						baseQuery += fmt.Sprintf(" AND p.properties['%s'] != ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND p.props['%s'] != ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "contains":
-						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.properties['%s'], ?) > 0", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.props['%s'], ?) > 0", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "does_not_contain":
-						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.properties['%s'], ?) = 0", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.props['%s'], ?) = 0", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "is_set":
-						baseQuery += fmt.Sprintf(" AND mapContains(p.properties, '%s')", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND mapContains(p.props, '%s')", sanitizeKey(f.Property))
 					case "is_not_set":
-						baseQuery += fmt.Sprintf(" AND NOT mapContains(p.properties, '%s')", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND NOT mapContains(p.props, '%s')", sanitizeKey(f.Property))
 					case "gt":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "lt":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "gte":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "lte":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.properties['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "eq":
-						baseQuery += fmt.Sprintf(" AND p.properties['%s'] = ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND p.props['%s'] = ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "neq":
-						baseQuery += fmt.Sprintf(" AND p.properties['%s'] != ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND p.props['%s'] != ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "in_last":
 						// Handle Date "in_last" logic: e.g. "7d"
@@ -197,7 +236,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 							} // minutes or months? Assuming minutes for simple parse, but UI usually sends 'd' or 'h'
 						}
 						if seconds > 0 {
-							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(p.properties['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
+							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(p.props['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
 							args = append(args, seconds)
 						}
 					}
@@ -324,8 +363,8 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	}
 
 	baseQuery += `
-		GROUP BY p.distinct_id, p.properties, p.last_seen
-		ORDER BY p.last_seen DESC 
+		GROUP BY p.distinct_id, p.props, p.latest_seen
+		ORDER BY p.latest_seen DESC
 		LIMIT ? OFFSET ?
 	`
 	args = append(args, limit, offset)
@@ -346,7 +385,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 		if err := rows.Scan(&p.DistinctID, &p.Properties, &p.LastSeen, &p.Aliases); err != nil {
 			continue
 		}
-		// Filter empty aliases
+		// Clean aliases
 		var cleanAliases []string
 		for _, a := range p.Aliases {
 			if a != "" {
@@ -357,6 +396,10 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 		if p.Aliases == nil {
 			p.Aliases = []string{}
 		}
+
+		// Resolve display_id for list view
+		p.DisplayID = h.resolveDisplayID(projID, environment, p.DistinctID)
+
 		people = append(people, p)
 	}
 
@@ -409,35 +452,128 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 	environment := c.Query("environment", "live")
 	projID := strconv.Itoa(int(project.ID))
 
-	// 2. Fetch Person from ClickHouse
+	// 2. Resolve alias chain: follow alias_id -> distinct_id links recursively
+	// The SDK creates aliases like: alias_id = previousID, distinct_id = newUserID
+	// So the chain is: user_88 -> user_304 -> user_532 -> anonymous_uuid (person row)
+	// We need to follow the chain: given distinct_id in aliases, get alias_id, repeat
+	canonicalID := distinctID
+
+	// First, check if the person exists directly with this distinct_id
+	var directCount uint64
+	h.CH.QueryRow(context.Background(),
+		"SELECT count() FROM persons WHERE project_id = ? AND environment = ? AND distinct_id = ?",
+		projID, environment, distinctID,
+	).Scan(&directCount)
+
+	if directCount == 0 {
+		// Person doesn't exist directly — resolve alias chain (max 10 hops to prevent loops)
+		currentID := distinctID
+		visited := map[string]bool{currentID: true}
+
+		for i := 0; i < 10; i++ {
+			var resolvedID string
+			err := h.CH.QueryRow(context.Background(),
+				"SELECT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ? LIMIT 1",
+				projID, environment, currentID,
+			).Scan(&resolvedID)
+
+			if err != nil || resolvedID == "" {
+				break // No more aliases to follow
+			}
+			if visited[resolvedID] {
+				break // Prevent infinite loop
+			}
+
+			visited[resolvedID] = true
+			currentID = resolvedID
+			log.Printf("Alias chain: %s -> %s", canonicalID, currentID)
+		}
+		canonicalID = currentID
+		if canonicalID != distinctID {
+			log.Printf("Alias fully resolved: %s -> %s", distinctID, canonicalID)
+		}
+	}
+
+	// 3. Fetch Person from ClickHouse (deduplicated via argMax)
 	query := `
 		SELECT 
 			p.distinct_id,
-			p.properties,
-			p.last_seen,
+			p.props AS properties,
+			p.latest_seen AS last_seen,
 			groupArray(pa.alias_id) as aliases
-		FROM persons p
+		FROM (
+			SELECT 
+				distinct_id,
+				argMax(properties, last_seen) AS props,
+				max(last_seen) AS latest_seen
+			FROM persons
+			WHERE project_id = ? AND environment = ? AND distinct_id = ?
+			GROUP BY distinct_id
+		) p
 		LEFT JOIN person_aliases pa 
-			ON p.distinct_id = pa.distinct_id 
-			AND p.project_id = pa.project_id 
-			AND p.environment = pa.environment
-		WHERE p.project_id = ? AND p.environment = ? AND p.distinct_id = ?
-		GROUP BY p.distinct_id, p.properties, p.last_seen
+			ON p.distinct_id = pa.distinct_id
+		GROUP BY p.distinct_id, p.props, p.latest_seen
 		LIMIT 1
 	`
 
 	var p PersonProfile
-	if err := h.CH.QueryRow(context.Background(), query, projID, environment, distinctID).Scan(
+	if err := h.CH.QueryRow(context.Background(), query, projID, environment, canonicalID).Scan(
 		&p.DistinctID, &p.Properties, &p.LastSeen, &p.Aliases,
 	); err != nil {
-		if err.Error() == "sql: no rows in result set" { // Check standard sql error or driver specific
-			return c.Status(404).JSON(fiber.Map{"error": "Person not found"})
+		// Person not found in persons table — try to create a stub from events
+		log.Printf("Person %s (canonical: %s) not in persons table, checking events...", distinctID, canonicalID)
+
+		// Check if this distinct_id (or any ID in the alias chain) has events
+		idsToCheck := []string{distinctID, canonicalID}
+		var lastSeen time.Time
+		var foundDistinctID string
+
+		for _, checkID := range idsToCheck {
+			err2 := h.CH.QueryRow(context.Background(),
+				"SELECT distinct_id, max(timestamp) FROM events WHERE project_id = ? AND environment = ? AND distinct_id = ? GROUP BY distinct_id",
+				projID, environment, checkID,
+			).Scan(&foundDistinctID, &lastSeen)
+			if err2 == nil {
+				break
+			}
 		}
-		log.Println("Details: ClickHouse GetPerson Error:", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch person"})
+
+		if foundDistinctID != "" {
+			// Found events for this user, create stub profile
+			p = PersonProfile{
+				DistinctID: distinctID, // Use the originally requested ID
+				Properties: map[string]string{},
+				LastSeen:   lastSeen,
+				Aliases:    []string{},
+			}
+
+			// Collect all known aliases for this user
+			aliasRows, err := h.CH.Query(context.Background(),
+				"SELECT alias_id, distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND (alias_id = ? OR distinct_id = ?)",
+				projID, environment, canonicalID, distinctID,
+			)
+			if err == nil {
+				defer aliasRows.Close()
+				for aliasRows.Next() {
+					var aid, did string
+					if aliasRows.Scan(&aid, &did) == nil {
+						if aid != distinctID {
+							p.Aliases = append(p.Aliases, aid)
+						}
+						if did != distinctID {
+							p.Aliases = append(p.Aliases, did)
+						}
+					}
+				}
+			}
+
+			return c.JSON(fiber.Map{"data": p})
+		}
+
+		return c.Status(404).JSON(fiber.Map{"error": "Person not found"})
 	}
 
-	// Clean aliases
+	// Clean aliases and resolve display_id
 	var cleanAliases []string
 	for _, a := range p.Aliases {
 		if a != "" {
@@ -448,6 +584,9 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 	if p.Aliases == nil {
 		p.Aliases = []string{}
 	}
+
+	// Resolve display_id: follow alias chain forward to find the latest identity
+	p.DisplayID = h.resolveDisplayID(projID, environment, p.DistinctID)
 
 	return c.JSON(fiber.Map{"data": p})
 }
