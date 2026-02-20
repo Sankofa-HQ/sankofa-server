@@ -11,6 +11,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/gosimple/slug"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -34,10 +35,10 @@ func (h *AuthHandler) RegisterRoutes(api fiber.Router) {
 }
 
 // Helper to extract user ID from token
-func (h *AuthHandler) extractUserFromToken(c *fiber.Ctx) (uint, error) {
+func (h *AuthHandler) extractUserFromToken(c *fiber.Ctx) (string, error) {
 	authHeader := c.Get("Authorization")
 	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
-		return 0, fmt.Errorf("missing or invalid token")
+		return "", fmt.Errorf("missing or invalid token")
 	}
 	tokenString := authHeader[7:]
 
@@ -49,15 +50,15 @@ func (h *AuthHandler) extractUserFromToken(c *fiber.Ctx) (uint, error) {
 	})
 
 	if err != nil || !token.Valid {
-		return 0, fmt.Errorf("invalid token")
+		return "", fmt.Errorf("invalid token")
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return 0, fmt.Errorf("invalid token claims")
+		return "", fmt.Errorf("invalid token claims")
 	}
 
-	return uint(claims["user_id"].(float64)), nil
+	return fmt.Sprintf("%v", claims["user_id"]), nil
 }
 
 func (h *AuthHandler) UpdateMe(c *fiber.Ctx) error {
@@ -77,7 +78,7 @@ func (h *AuthHandler) UpdateMe(c *fiber.Ctx) error {
 	}
 
 	var user database.User
-	if err := h.DB.First(&user, userID).Error; err != nil {
+	if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
@@ -120,7 +121,7 @@ func (h *AuthHandler) UpdatePassword(c *fiber.Ctx) error {
 	}
 
 	var user database.User
-	if err := h.DB.First(&user, userID).Error; err != nil {
+	if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
@@ -334,9 +335,7 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 // Helpers
 
 func generateSlug(name string) string {
-	// Simple slug generation: lowercase, replace spaces with hyphens
-	// robust slug generation would use a library
-	return name // Placeholder, needs actual implementation
+	return slug.Make(name)
 }
 
 func generateAPIKey() (string, error) {
@@ -356,7 +355,7 @@ func SetJWTSecret(secret string) {
 	}
 }
 
-func generateJWT(userID uint, email string) (string, error) {
+func generateJWT(userID string, email string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"email":   email,

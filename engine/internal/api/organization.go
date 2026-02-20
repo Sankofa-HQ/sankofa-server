@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	"sankofa/engine/internal/database"
@@ -41,13 +40,13 @@ func (h *OrganizationHandler) RegisterRoutes(router fiber.Router) {
 // ... existing code ...
 
 func (h *OrganizationHandler) LeaveOrganization(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	orgID, err := strconv.Atoi(c.Params("id"))
-	if err != nil {
+	orgID := c.Params("id")
+	if orgID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid organization ID"})
 	}
 
@@ -79,7 +78,7 @@ func (h *OrganizationHandler) LeaveOrganization(c *fiber.Ctx) error {
 
 // CreateOrganization - POST /api/orgs
 func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
-	userID, _ := c.Locals("user_id").(uint)
+	userID, _ := c.Locals("user_id").(string)
 
 	type Request struct {
 		Name        string `json:"name"`
@@ -166,10 +165,10 @@ func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
 
 // GetOrganization - GET /api/v1/orgs/:org_id
 func (h *OrganizationHandler) GetOrganization(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint) // middleware
+	orgID, _ := c.Locals("org_id").(string) // middleware
 
 	var org database.Organization
-	if err := h.DB.First(&org, orgID).Error; err != nil {
+	if err := h.DB.First(&org, "id = ?", orgID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
 	}
 
@@ -178,7 +177,7 @@ func (h *OrganizationHandler) GetOrganization(c *fiber.Ctx) error {
 
 // UpdateOrganization - PUT /api/v1/orgs/:org_id
 func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
+	orgID, _ := c.Locals("org_id").(string)
 
 	type Request struct {
 		Name         string `json:"name"`
@@ -192,7 +191,7 @@ func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
 	}
 
 	var org database.Organization
-	if err := h.DB.First(&org, orgID).Error; err != nil {
+	if err := h.DB.First(&org, "id = ?", orgID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
 	}
 
@@ -218,8 +217,8 @@ func (h *OrganizationHandler) UpdateOrganization(c *fiber.Ctx) error {
 
 // DeleteOrganization - DELETE /api/v1/orgs/:org_id
 func (h *OrganizationHandler) DeleteOrganization(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
-	userID, _ := c.Locals("user_id").(uint)
+	orgID, _ := c.Locals("org_id").(string)
+	userID, _ := c.Locals("user_id").(string)
 
 	// Verify user is Owner
 	var member database.OrganizationMember
@@ -270,8 +269,8 @@ func (h *OrganizationHandler) DeleteOrganization(c *fiber.Ctx) error {
 
 // CreateProject - /v1/orgs/:org_id/projects
 func (h *OrganizationHandler) CreateProject(c *fiber.Ctx) error {
-	userID, _ := c.Locals("user_id").(uint)
-	orgID, _ := c.Locals("org_id").(uint) // Added by middleware
+	userID, _ := c.Locals("user_id").(string)
+	orgID, _ := c.Locals("org_id").(string) // Added by middleware
 
 	type Request struct {
 		Name     string `json:"name"`
@@ -332,14 +331,14 @@ func (h *OrganizationHandler) CreateProject(c *fiber.Ctx) error {
 
 // InviteMember - /v1/orgs/:org_id/invite
 func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
+	orgID, _ := c.Locals("org_id").(string)
 
 	type InviteRequest struct {
-		Email       string `json:"email"`
-		OrgRole     string `json:"org_role"` // Member, Admin
-		ProjectIDs  []uint `json:"project_ids"`
-		TeamIDs     []uint `json:"team_ids"`
-		ProjectRole string `json:"project_role"` // Viewer, Editor, Admin
+		Email       string   `json:"email"`
+		OrgRole     string   `json:"org_role"` // Member, Admin
+		ProjectIDs  []string `json:"project_ids"`
+		TeamIDs     []string `json:"team_ids"`
+		ProjectRole string   `json:"project_role"` // Viewer, Editor, Admin
 	}
 	var req InviteRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -443,10 +442,10 @@ func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
 
 // GetMembers - GET /v1/orgs/:org_id/members
 func (h *OrganizationHandler) GetMembers(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
+	orgID, _ := c.Locals("org_id").(string)
 
 	type MemberResponse struct {
-		UserID   uint      `json:"user_id"`
+		UserID   string    `json:"user_id"`
 		FullName string    `json:"full_name"`
 		Email    string    `json:"email"`
 		Role     string    `json:"role"`
@@ -470,10 +469,9 @@ func (h *OrganizationHandler) GetMembers(c *fiber.Ctx) error {
 
 // RemoveMember - DELETE /v1/orgs/:org_id/members/:user_id
 func (h *OrganizationHandler) RemoveMember(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
-	targetUserIDStr := c.Params("user_id")
-	targetUserID, err := strconv.Atoi(targetUserIDStr)
-	if err != nil {
+	orgID, _ := c.Locals("org_id").(string)
+	targetUserID := c.Params("user_id")
+	if targetUserID == "" {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user ID"})
 	}
 
@@ -492,7 +490,7 @@ func (h *OrganizationHandler) RemoveMember(c *fiber.Ctx) error {
 	// We need to find all projects for this org first.
 	// OR we can do a DELETE with JOIN/Subquery logic, but Gorm might be tricky.
 	// Simpler: Find project IDs first.
-	var projectIDs []uint
+	var projectIDs []string
 	tx.Model(&database.Project{}).Where("organization_id = ?", orgID).Pluck("id", &projectIDs)
 
 	if len(projectIDs) > 0 {
@@ -523,7 +521,7 @@ func generateOrgAPIKey(env string) (string, error) {
 
 // CreateTeam - POST /v1/orgs/:org_id/teams
 func (h *OrganizationHandler) CreateTeam(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
+	orgID, _ := c.Locals("org_id").(string)
 
 	type Request struct {
 		Name string `json:"name"`
@@ -549,7 +547,7 @@ func (h *OrganizationHandler) CreateTeam(c *fiber.Ctx) error {
 
 // GetTeams - GET /v1/orgs/:org_id/teams
 func (h *OrganizationHandler) GetTeams(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
+	orgID, _ := c.Locals("org_id").(string)
 
 	var teams []database.Team
 	if err := h.DB.Where("organization_id = ?", orgID).Find(&teams).Error; err != nil {
@@ -561,13 +559,13 @@ func (h *OrganizationHandler) GetTeams(c *fiber.Ctx) error {
 
 // AddTeamMember - POST /v1/orgs/:org_id/teams/:team_id/members
 func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
-	teamID, err := strconv.Atoi(c.Params("team_id"))
-	if err != nil {
+	teamID := c.Params("team_id")
+	if teamID == "" {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
 	}
 
 	type Request struct {
-		UserID uint   `json:"user_id"`
+		UserID string `json:"user_id"`
 		Role   string `json:"role"`
 	}
 	var req Request
@@ -579,7 +577,7 @@ func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
 	// For simplicity assumes team_id is valid for now or we trust the caller has access to the org.
 
 	member := database.TeamMember{
-		TeamID:    uint(teamID),
+		TeamID:    teamID,
 		UserID:    req.UserID,
 		Role:      req.Role, // Member, Lead
 		CreatedAt: time.Now(),
@@ -594,13 +592,13 @@ func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
 
 // AssignTeamProject - POST /v1/orgs/:org_id/teams/:team_id/projects
 func (h *OrganizationHandler) AssignTeamProject(c *fiber.Ctx) error {
-	teamID, err := strconv.Atoi(c.Params("team_id"))
-	if err != nil {
+	teamID := c.Params("team_id")
+	if teamID == "" {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
 	}
 
 	type Request struct {
-		ProjectID uint   `json:"project_id"`
+		ProjectID string `json:"project_id"`
 		Role      string `json:"role"`
 	}
 	var req Request
@@ -609,7 +607,7 @@ func (h *OrganizationHandler) AssignTeamProject(c *fiber.Ctx) error {
 	}
 
 	tp := database.TeamProject{
-		TeamID:    uint(teamID),
+		TeamID:    teamID,
 		ProjectID: req.ProjectID,
 		Role:      req.Role,
 		CreatedAt: time.Now(),
@@ -626,12 +624,12 @@ func (h *OrganizationHandler) AssignTeamProject(c *fiber.Ctx) error {
 
 // GetUsage - GET /v1/orgs/:org_id/usage
 func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
-	orgID, _ := c.Locals("org_id").(uint)
-	log.Printf("🔹 GetUsage called for OrgID: %d", orgID)
+	orgID, _ := c.Locals("org_id").(string)
+	log.Printf("🔹 GetUsage called for OrgID: %s", orgID)
 
 	// 1. Get Org Plan
 	var org database.Organization
-	if err := h.DB.First(&org, orgID).Error; err != nil {
+	if err := h.DB.First(&org, "id = ?", orgID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
 	}
 
@@ -656,7 +654,7 @@ func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
 	var liveProfiles, testProfiles uint64
 
 	if h.CH != nil {
-		strOrgID := strconv.Itoa(int(orgID))
+		strOrgID := orgID
 
 		// Events - Live
 		if err := h.CH.QueryRow(c.Context(), "SELECT count() FROM events WHERE organization_id = ? AND environment = 'live'", strOrgID).Scan(&liveEvents); err != nil {

@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,14 +18,11 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/joho/godotenv"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
-
-//go:embed dist
-var frontend embed.FS
 
 // --- CONFIG ---
 var (
@@ -41,6 +36,10 @@ var (
 	APP_PORT             string
 	CORS_ALLOWED_ORIGINS string
 	API_SECRET           string
+	ADMIN_EMAIL          string
+	ADMIN_PASSWORD       string
+	ADMIN_ORG_NAME       string
+	ADMIN_PROJECT_NAME   string
 )
 
 func loadConfig() {
@@ -61,6 +60,10 @@ func loadConfig() {
 	APP_PORT = getEnv("APP_PORT", "8080")
 	CORS_ALLOWED_ORIGINS = getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 	API_SECRET = getEnv("API_SECRET", "super-secret-key-change-me")
+	ADMIN_EMAIL = getEnv("ADMIN_EMAIL", "admin@sankofa.dev")
+	ADMIN_PASSWORD = getEnv("ADMIN_PASSWORD", "password")
+	ADMIN_ORG_NAME = getEnv("ADMIN_ORG_NAME", "Sankofa Admin Org")
+	ADMIN_PROJECT_NAME = getEnv("ADMIN_PROJECT_NAME", "Sankofa Internal")
 }
 
 func getEnv(key, fallback string) string {
@@ -72,6 +75,7 @@ func getEnv(key, fallback string) string {
 
 // --- ANALYTICS MODELS (Still Internal for now) ---
 type AnalyticsEvent struct {
+	ID                string            `json:"id"`
 	EventName         string            `json:"event_name"`
 	DistinctID        string            `json:"distinct_id"`
 	Properties        map[string]string `json:"properties"`
@@ -320,6 +324,8 @@ func main() {
 		}
 
 		// Context Resolution
+		nanoID, _ := gonanoid.New(21)
+		e.ID = "evt_" + nanoID
 		e.TenantID = fmt.Sprint(project.ID) // Still used for sharding/partitioning maybe? Or just legacy.
 		e.ProjectID = fmt.Sprint(project.ID)
 		e.OrganizationID = fmt.Sprint(project.OrganizationID)
@@ -419,15 +425,6 @@ func main() {
 		}
 	})
 
-	// SPA CATCH-ALL
-	app.Use("/", filesystem.New(filesystem.Config{
-		Root:         http.FS(frontend),
-		PathPrefix:   "dist",
-		Browse:       false,
-		Index:        "index.html",
-		NotFoundFile: "dist/index.html",
-	}))
-
 	// START SERVER
 	go func() {
 		fmt.Printf("🚀 Sankofa Engine running on :%s\n", APP_PORT)
@@ -499,7 +496,7 @@ func startAliasWorker(ctx context.Context, conn driver.Conn, stream <-chan Perso
 
 func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 	ctx := context.Background()
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, properties, default_properties, lib_version)")
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (id, tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, properties, default_properties, lib_version)")
 	if err != nil {
 		log.Println("❌ Batch Prep Error:", err)
 		return
@@ -512,6 +509,7 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 			e.DefaultProperties = make(map[string]string)
 		}
 		batch.Append(
+			e.ID,
 			e.TenantID,
 			e.ProjectID,
 			e.OrganizationID,
@@ -550,6 +548,7 @@ func initClickHouseSchema(conn driver.Conn) {
 	// 1. Events
 	err := conn.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS events (
+		id String,
 		tenant_id String,
 		project_id String,
 		organization_id String,
@@ -585,7 +584,7 @@ func initClickHouseSchema(conn driver.Conn) {
 	}
 
 	// MIGRATION: Add columns if they don't exist (Idempotent)
-	cols := []string{"project_id", "organization_id", "environment"}
+	cols := []string{"id", "project_id", "organization_id", "environment"}
 	tables := []string{"events", "persons"}
 
 	for _, table := range tables {
@@ -623,8 +622,8 @@ func initClickHouseSchema(conn driver.Conn) {
 	// 4. Cohort Static Members (CollapsingMergeTree)
 	err = conn.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS cohort_static_members (
-		project_id UInt64,
-		cohort_id UInt64,
+		project_id String,
+		cohort_id String,
 		distinct_id String,
 		sign Int8
 	) ENGINE = CollapsingMergeTree(sign)
@@ -643,11 +642,11 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	}
 
 	fmt.Println("🌱 Seeding Super Admin...")
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
+	hash, _ := bcrypt.GenerateFromPassword([]byte(ADMIN_PASSWORD), bcrypt.DefaultCost)
 
 	// Create User
 	admin := database.User{
-		Email:        "admin@sankofa.dev",
+		Email:        ADMIN_EMAIL,
 		PasswordHash: string(hash),
 		FullName:     "Super Admin",
 		CreatedAt:    time.Now(),
@@ -657,7 +656,7 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 
 	// Create Org
 	org := database.Organization{
-		Name:      "Sankofa Admin Org",
+		Name:      ADMIN_ORG_NAME,
 		Slug:      "sankofa-admin",
 		Plan:      "Enterprise",
 		CreatedAt: time.Now(),
@@ -669,7 +668,7 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	// Create Project (Idempotent)
 	project := database.Project{
 		OrganizationID: org.ID,
-		Name:           "Sankofa Internal",
+		Name:           ADMIN_PROJECT_NAME,
 		APIKey:         "sk_live_admin_key",
 		TestAPIKey:     "sk_test_admin_key",
 		Timezone:       "UTC",
@@ -679,8 +678,8 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	}
 
 	var existingProject database.Project
-	if err := db.Where("api_key = ?", project.APIKey).First(&existingProject).Error; err == nil {
-		// Project exists, ensure TestAPIKey is set
+	if err := db.Where("organization_id = ? AND name = ?", org.ID, ADMIN_PROJECT_NAME).First(&existingProject).Error; err == nil {
+		// Project exists, ensure TestAPIKey is set (only if it's currently missing)
 		if existingProject.TestAPIKey == "" {
 			db.Model(&existingProject).Update("test_api_key", project.TestAPIKey)
 			fmt.Println("✅ Updated existing project with Test API Key")
@@ -698,7 +697,7 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	// Update User Context
 	db.Model(&admin).Update("current_project_id", project.ID)
 
-	fmt.Println("✅ Seed Complete. Login: admin@sankofa.dev / password")
+	fmt.Printf("✅ Seed Complete. Login: %s / <your-password>\n", ADMIN_EMAIL)
 }
 
 func seedDefaultPlans(db *gorm.DB) {

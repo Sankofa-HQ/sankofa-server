@@ -37,7 +37,7 @@ func (h *ProjectHandler) RegisterRoutes(api fiber.Router, authMiddleware fiber.H
 }
 
 func (h *ProjectHandler) GetOrganizations(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -47,7 +47,7 @@ func (h *ProjectHandler) GetOrganizations(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch memberships"})
 	}
 
-	var orgIDs []uint
+	var orgIDs []string
 	for _, m := range memberships {
 		orgIDs = append(orgIDs, m.OrganizationID)
 	}
@@ -61,7 +61,7 @@ func (h *ProjectHandler) GetOrganizations(c *fiber.Ctx) error {
 }
 
 func (h *ProjectHandler) GetProjects(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -105,7 +105,7 @@ func (h *ProjectHandler) GetProjects(c *fiber.Ctx) error {
 
 		if h.CH != nil {
 			// Count Events
-			tenantID := strconv.Itoa(int(p.ID))
+			tenantID := p.ID
 			env := p.Environment
 			if env == "" {
 				env = "live"
@@ -135,14 +135,14 @@ func (h *ProjectHandler) GetProjects(c *fiber.Ctx) error {
 }
 
 func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
 	type CreateProjectReq struct {
 		Name           string `json:"name"`
-		OrganizationID uint   `json:"org_id"`
+		OrganizationID string `json:"org_id"`
 	}
 	var req CreateProjectReq
 	if err := c.BodyParser(&req); err != nil {
@@ -192,7 +192,7 @@ func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
 	}
 
 	// Reload with associations for frontend
-	if err := h.DB.Preload("CreatedBy").Preload("Organization").First(&project, project.ID).Error; err != nil {
+	if err := h.DB.Preload("CreatedBy").Preload("Organization").First(&project, "id = ?", project.ID).Error; err != nil {
 		log.Println("Error reloading project:", err)
 	}
 
@@ -201,13 +201,13 @@ func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
 
 // UpdateProject - PUT /v1/projects/:id
 func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	projectID, err := strconv.Atoi(c.Params("id"))
-	if err != nil {
+	projectID := c.Params("id")
+	if projectID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid project ID"})
 	}
 
@@ -233,7 +233,7 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 
 	// 2. Update
 	var project database.Project
-	if err := h.DB.First(&project, projectID).Error; err != nil {
+	if err := h.DB.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
 
@@ -260,7 +260,7 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	stats := ProjectWithStats{Project: project}
 
 	if h.CH != nil {
-		tenantID := strconv.Itoa(int(project.ID))
+		tenantID := project.ID
 		env := project.Environment
 		if env == "" {
 			env = "live"
@@ -282,13 +282,13 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 
 // DeleteProject - DELETE /v1/projects/:id
 func (h *ProjectHandler) DeleteProject(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	projectID, err := strconv.Atoi(c.Params("id"))
-	if err != nil {
+	projectID := c.Params("id")
+	if projectID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid project ID"})
 	}
 

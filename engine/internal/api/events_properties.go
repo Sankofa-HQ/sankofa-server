@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"log"
-	"strconv"
 
 	"sankofa/engine/internal/database"
 
@@ -13,27 +12,26 @@ import (
 // GetEventProperties - GET /api/v1/events/properties
 func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 	projectIDStr := c.Query("project_id")
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
 	var project database.Project
 	if projectIDStr != "" {
-		id, _ := strconv.Atoi(projectIDStr)
-		if err := h.DB.First(&project, id).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", projectIDStr).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 		// TODO: Check if user has access to project
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -63,8 +61,8 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 	`
 
 	rows, err := h.CH.Query(context.Background(), query,
-		strconv.Itoa(int(project.ID)), environment, eventName,
-		strconv.Itoa(int(project.ID)), environment, eventName,
+		project.ID, environment, eventName,
+		project.ID, environment, eventName,
 	)
 	if err != nil {
 		log.Println("ClickHouse Query Error:", err)

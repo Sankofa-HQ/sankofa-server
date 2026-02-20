@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 
 	"sankofa/engine/internal/database"
 
@@ -15,13 +14,13 @@ import (
 // PreviewCohort - POST /api/v1/cohorts/preview
 // Accepts the same filter rules as the people list and returns just the count
 func (h *CohortsHandler) PreviewCohort(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
 	var req struct {
-		ProjectID   uint            `json:"project_id"`
+		ProjectID   string          `json:"project_id"`
 		Environment string          `json:"environment"`
 		Filters     json.RawMessage `json:"filters"`
 		Rules       json.RawMessage `json:"rules"`
@@ -32,19 +31,19 @@ func (h *CohortsHandler) PreviewCohort(c *fiber.Ctx) error {
 
 	// Resolve project
 	var project database.Project
-	if req.ProjectID > 0 {
-		if err := h.DB.First(&project, req.ProjectID).Error; err != nil {
+	if req.ProjectID != "" {
+		if err := h.DB.First(&project, "id = ?", req.ProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -53,7 +52,7 @@ func (h *CohortsHandler) PreviewCohort(c *fiber.Ctx) error {
 	if env == "" {
 		env = "live"
 	}
-	projID := strconv.Itoa(int(project.ID))
+	projID := project.ID
 
 	// Parse filters (same format as /api/v1/people)
 	// Parse AST instead of flattened rules

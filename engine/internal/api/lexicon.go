@@ -423,18 +423,18 @@ func (h *LexiconHandler) getProjectFromContext(c *fiber.Ctx) (*database.Project,
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return nil, fmt.Errorf("Project not found")
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return nil, fmt.Errorf("User not found")
 		}
 		if user.CurrentProjectID == nil {
 			return nil, fmt.Errorf("No project selected")
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return nil, fmt.Errorf("Project not found")
 		}
 	}

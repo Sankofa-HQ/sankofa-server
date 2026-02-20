@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"sankofa/engine/internal/database"
@@ -61,8 +60,11 @@ func (m *AuthMiddleware) RequireAuth(c *fiber.Ctx) error {
 
 	// Inject user_id into locals
 	// claims["user_id"] is float64 in JSON
-	userID := uint(claims["user_id"].(float64))
-	c.Locals("user_id", userID) // Store as uint
+	userID, ok := claims["user_id"].(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized: Invalid user ID format in token"})
+	}
+	c.Locals("user_id", userID)
 
 	return c.Next()
 }
@@ -82,10 +84,7 @@ func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
 			return c.Status(400).JSON(fiber.Map{"error": "Missing x-project-id header"})
 		}
 
-		projectID, err := strconv.Atoi(projectIDStr)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Invalid project ID"})
-		}
+		projectID := projectIDStr // IDs are now strings
 
 		var member database.ProjectMember
 		if err := m.DB.Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
@@ -98,7 +97,7 @@ func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
 		}
 
 		// Inject project context
-		c.Locals("project_id", uint(projectID))
+		c.Locals("project_id", projectID)
 		return c.Next()
 	}
 }
@@ -116,10 +115,7 @@ func (m *AuthMiddleware) RequireOrgAccess(minRole string) fiber.Handler {
 			return c.Status(400).JSON(fiber.Map{"error": "Missing org_id param"})
 		}
 
-		orgID, err := strconv.Atoi(orgIDStr)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Invalid org ID"})
-		}
+		orgID := orgIDStr // IDs are now strings
 
 		var member database.OrganizationMember
 		if err := m.DB.Where("organization_id = ? AND user_id = ?", orgID, userID).First(&member).Error; err != nil {
@@ -132,7 +128,7 @@ func (m *AuthMiddleware) RequireOrgAccess(minRole string) fiber.Handler {
 		}
 
 		// Inject org context
-		c.Locals("org_id", uint(orgID))
+		c.Locals("org_id", orgID)
 		return c.Next()
 	}
 }

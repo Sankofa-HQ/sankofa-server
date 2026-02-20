@@ -99,9 +99,9 @@ func (h *EventsHandler) resolveAllAliasedIDs(projID, environment, startID string
 	return result
 }
 
-// ListEvents - GET /api/v1/events
+// TrackEvent handles the "Fast Path". Checks RAM, queues if new.
 func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -112,19 +112,19 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 	if queryProjectID != "" {
 		// Use project ID from frontend
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		// Fallback to user's current project in DB
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -141,8 +141,8 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	endTime := c.Query("end_time", "")
 	environment := c.Query("environment", "live")
 
-	orgID := strconv.Itoa(int(project.OrganizationID))
-	projID := strconv.Itoa(int(project.ID))
+	orgID := project.OrganizationID
+	projID := project.ID
 
 	// 1. Build Base WHERE Clause
 	whereClause := "WHERE tenant_id = ? AND environment = ?"
@@ -362,7 +362,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 					if f.Type == "cohort" {
 						cohortIDStr := f.Value
 						var cohort database.Cohort
-						if err := h.DB.First(&cohort, cohortIDStr).Error; err == nil {
+						if err := h.DB.First(&cohort, "id = ?", cohortIDStr).Error; err == nil {
 							var cohortSQL string
 							var cohortArgs []interface{}
 
@@ -479,7 +479,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 // GetEventNames - GET /api/v1/events/names
 func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -489,18 +489,18 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -521,7 +521,7 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 
 	// Fallback: if Lexicon is empty, query ClickHouse directly
 	if len(eventNames) == 0 {
-		projID := strconv.Itoa(int(project.ID))
+		projID := project.ID
 		environment := c.Query("environment", "live")
 		rows, err := h.CH.Query(context.Background(),
 			"SELECT DISTINCT event_name FROM events WHERE tenant_id = ? AND environment = ? ORDER BY event_name",
@@ -549,17 +549,75 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 	})
 }
 
-// GetEventDetail - GET /api/v1/events/:id (stub for now)
+// GetEventDetail - GET /api/v1/events/:id
 func (h *EventsHandler) GetEventDetail(c *fiber.Ctx) error {
-	// For now, events don't have unique IDs in our schema
-	// This would require adding a UUID field to events table
-	return c.Status(501).JSON(fiber.Map{"error": "Not implemented yet"})
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	eventID := c.Params("id")
+	if eventID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing event ID"})
+	}
+
+	// 1. Resolve Project
+	var project database.Project
+	queryProjectID := c.Query("project_id", "")
+
+	if queryProjectID != "" {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	} else {
+		var user database.User
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
+		}
+		if user.CurrentProjectID == nil {
+			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
+		}
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	}
+
+	environment := c.Query("environment", "live")
+	projID := project.ID
+
+	// 2. Fetch Event from ClickHouse
+	query := `
+		SELECT 
+			id, timestamp, event_name, distinct_id, properties, default_properties, lib_version
+		FROM events
+		WHERE project_id = ? AND environment = ? AND id = ?
+		LIMIT 1
+	`
+
+	var e struct {
+		ID                string            `json:"id"`
+		Timestamp         time.Time         `json:"timestamp"`
+		EventName         string            `json:"event_name"`
+		DistinctID        string            `json:"distinct_id"`
+		Properties        map[string]string `json:"properties"`
+		DefaultProperties map[string]string `json:"default_properties"`
+		LibVersion        string            `json:"lib_version"`
+	}
+
+	if err := h.CH.QueryRow(context.Background(), query, projID, environment, eventID).Scan(
+		&e.ID, &e.Timestamp, &e.EventName, &e.DistinctID, &e.Properties, &e.DefaultProperties, &e.LibVersion,
+	); err != nil {
+		log.Printf("GetEventDetail error: %v, event_id: %s", err, eventID)
+		return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+	}
+
+	return c.JSON(fiber.Map{"data": e})
 }
 
 // GetEventCounts - GET /api/v1/events/counts
 // Returns event counts grouped by event_name for the last 30 days
 func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -568,25 +626,25 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
 
 	environment := c.Query("environment", "live")
 	days := c.QueryInt("days", 30)
-	projID := strconv.Itoa(int(project.ID))
+	projID := project.ID
 
 	query := `
 		SELECT event_name, count() as cnt
@@ -623,7 +681,7 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 
 // GetEventValues - GET /api/v1/events/values
 func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -632,18 +690,18 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -673,7 +731,7 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 		FROM events
 		WHERE tenant_id = ? AND environment = ?
 	`, col)
-	args := []interface{}{strconv.Itoa(int(project.ID)), environment}
+	args := []interface{}{project.ID, environment}
 
 	if eventName != "" {
 		query += " AND event_name = ?"

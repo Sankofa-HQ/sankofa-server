@@ -261,12 +261,12 @@ func BuildCohortSQL(db *gorm.DB, projectID string, env string, ast CohortAST) (s
 // --- HANDLERS ---
 
 func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uint)
+	userID := c.Locals("user_id").(string)
 	var req struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Type        string          `json:"type"`
-		ProjectID   uint            `json:"project_id"`
+		ProjectID   string          `json:"project_id"`
 		Rules       json.RawMessage `json:"rules"`   // Dynamic
 		Members     []string        `json:"members"` // Static initial members?
 	}
@@ -301,7 +301,7 @@ func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
 				return
 			}
 			for _, mid := range req.Members {
-				_ = batch.Append(uint64(req.ProjectID), uint64(cohort.ID), mid, int8(1))
+				_ = batch.Append(req.ProjectID, cohort.ID, mid, int8(1))
 			}
 			if err := batch.Send(); err != nil {
 				log.Println("❌ Failed to write static members:", err)
@@ -310,7 +310,7 @@ func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
 	}
 
 	// Reload to get CreatedBy User
-	h.DB.Preload("CreatedBy").First(&cohort, cohort.ID)
+	h.DB.Preload("CreatedBy").First(&cohort, "id = ?", cohort.ID)
 
 	creatorName := "Team"
 	if cohort.CreatedBy != nil {
@@ -349,14 +349,14 @@ func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
 
 	// Build enriched response
 	type CohortResponse struct {
-		ID          uint   `json:"id"`
+		ID          string `json:"id"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Type        string `json:"type"`
 		Rules       string `json:"rules"`
 		CreatedAt   string `json:"created_at"`
 		UpdatedAt   string `json:"updated_at"`
-		CreatedByID uint   `json:"created_by_id"`
+		CreatedByID string `json:"created_by_id"`
 		CreatorName string `json:"creator_name"`
 	}
 
@@ -392,7 +392,7 @@ func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
 func (h *CohortsHandler) GetCohort(c *fiber.Ctx) error {
 	id := c.Params("id")
 	var cohort database.Cohort
-	if err := h.DB.First(&cohort, id).Error; err != nil {
+	if err := h.DB.First(&cohort, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Cohort not found"})
 	}
 	return c.JSON(cohort)
@@ -410,7 +410,7 @@ func (h *CohortsHandler) UpdateCohort(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var cohort database.Cohort
-	if err := h.DB.First(&cohort, id).Error; err != nil {
+	if err := h.DB.First(&cohort, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Cohort not found"})
 	}
 
@@ -436,7 +436,7 @@ func (h *CohortsHandler) UpdateCohort(c *fiber.Ctx) error {
 	}
 
 	// Reload to get CreatedBy User
-	h.DB.Preload("CreatedBy").First(&cohort, cohort.ID)
+	h.DB.Preload("CreatedBy").First(&cohort, "id = ?", cohort.ID)
 
 	creatorName := "Team"
 	if cohort.CreatedBy != nil {
@@ -465,10 +465,10 @@ func (h *CohortsHandler) UpdateCohort(c *fiber.Ctx) error {
 // AddMembers (Static)
 func (h *CohortsHandler) AddMembers(c *fiber.Ctx) error {
 	idStr := c.Params("id")
-	cohortID, _ := strconv.Atoi(idStr)
+	cohortID := idStr
 	var req struct {
 		DistinctIDs []string `json:"distinct_ids"`
-		ProjectID   uint     `json:"project_id"` // Should verify match with cohort
+		ProjectID   string   `json:"project_id"` // Should verify match with cohort
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
@@ -482,7 +482,7 @@ func (h *CohortsHandler) AddMembers(c *fiber.Ctx) error {
 			return
 		}
 		for _, mid := range req.DistinctIDs {
-			_ = batch.Append(uint64(req.ProjectID), uint64(cohortID), mid, int8(1))
+			_ = batch.Append(req.ProjectID, cohortID, mid, int8(1))
 		}
 		if err := batch.Send(); err != nil {
 			log.Println("❌ Failed to add members:", err)
@@ -495,10 +495,10 @@ func (h *CohortsHandler) AddMembers(c *fiber.Ctx) error {
 // RemoveMembers (Static)
 func (h *CohortsHandler) RemoveMembers(c *fiber.Ctx) error {
 	idStr := c.Params("id")
-	cohortID, _ := strconv.Atoi(idStr)
+	cohortID := idStr
 	var req struct {
 		DistinctIDs []string `json:"distinct_ids"`
-		ProjectID   uint     `json:"project_id"`
+		ProjectID   string   `json:"project_id"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
@@ -512,7 +512,7 @@ func (h *CohortsHandler) RemoveMembers(c *fiber.Ctx) error {
 			return
 		}
 		for _, mid := range req.DistinctIDs {
-			_ = batch.Append(uint64(req.ProjectID), uint64(cohortID), mid, int8(-1))
+			_ = batch.Append(req.ProjectID, cohortID, mid, int8(-1))
 		}
 		if err := batch.Send(); err != nil {
 			log.Println("❌ Failed to remove members:", err)

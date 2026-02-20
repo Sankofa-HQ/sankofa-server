@@ -89,7 +89,7 @@ func (h *PeopleHandler) resolveDisplayID(projID, environment, canonicalID string
 // Params: project_id (opt), limit, offset, search
 func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	// 1. Auth & Context
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -99,19 +99,19 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		// Fallback to user's current project
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -124,7 +124,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	search := c.Query("search", "")
 	environment := c.Query("environment", "live")
 
-	projID := strconv.Itoa(int(project.ID))
+	projID := project.ID
 
 	// 2. Build ClickHouse Query
 	// Use a subquery with argMax to deduplicate ReplacingMergeTree rows
@@ -463,7 +463,7 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 	}
 
 	// 1. Auth & Context
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -473,24 +473,24 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
 
 	environment := c.Query("environment", "live")
-	projID := strconv.Itoa(int(project.ID))
+	projID := project.ID
 
 	// 2. Resolve alias chain: follow alias_id -> distinct_id links recursively
 	// The SDK creates aliases like: alias_id = previousID, distinct_id = newUserID
@@ -692,7 +692,7 @@ func (h *PeopleHandler) resolveAllAliasedIDs(projID, environment, startID string
 // GetPropertyKeys - GET /api/v1/people/properties/keys
 // Returns all distinct property keys from the persons table
 func (h *PeopleHandler) GetPropertyKeys(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -701,24 +701,24 @@ func (h *PeopleHandler) GetPropertyKeys(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
 
 	environment := c.Query("environment", "live")
-	projID := strconv.Itoa(int(project.ID))
+	projID := project.ID
 
 	query := `
 		SELECT DISTINCT arrayJoin(mapKeys(properties)) AS key
@@ -754,7 +754,7 @@ func (h *PeopleHandler) GetPropertyKeys(c *fiber.Ctx) error {
 // Returns distinct values for a given property key from the persons table
 // Params: property (required), search (optional), limit (optional)
 func (h *PeopleHandler) GetPropertyValues(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
@@ -763,18 +763,18 @@ func (h *PeopleHandler) GetPropertyValues(c *fiber.Ctx) error {
 	queryProjectID := c.Query("project_id", "")
 
 	if queryProjectID != "" {
-		if err := h.DB.First(&project, queryProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	} else {
 		var user database.User
-		if err := h.DB.First(&user, userID).Error; err != nil {
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
 		}
 		if user.CurrentProjectID == nil {
 			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
 		}
-		if err := h.DB.First(&project, *user.CurrentProjectID).Error; err != nil {
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 	}
@@ -788,7 +788,7 @@ func (h *PeopleHandler) GetPropertyValues(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"values": []string{}})
 	}
 
-	projID := strconv.Itoa(int(project.ID))
+	projID := project.ID
 
 	query := `
 		SELECT DISTINCT properties[?] AS val
