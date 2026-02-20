@@ -94,7 +94,7 @@ func TestBuildCohortSQL(t *testing.T) {
 				t.Fatalf("Failed to unmarshal JSON: %v", err)
 			}
 
-			gotSQL, args := BuildCohortSQL("1", "live", ast)
+			gotSQL, args := BuildCohortSQL(nil, "1", "live", ast)
 
 			normGot := strings.Join(strings.Fields(gotSQL), " ")
 			normWant := strings.Join(strings.Fields(tt.wantSQL), " ")

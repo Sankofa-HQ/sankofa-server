@@ -81,7 +81,7 @@ func (h *CohortsHandler) PreviewCohort(c *fiber.Ctx) error {
 	}
 
 	// Build the subquery using BuildCohortSQL
-	cohortSQL, cohortArgs := BuildCohortSQL(projID, env, ast)
+	cohortSQL, cohortArgs := BuildCohortSQL(h.DB, projID, env, ast)
 	log.Printf("DEBUG COHORT PREVIEW SQL: %s", cohortSQL)
 	log.Printf("DEBUG COHORT PREVIEW ARGS: %v", cohortArgs)
 	if cohortSQL == "(SELECT '' WHERE 1=0)" {

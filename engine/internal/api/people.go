@@ -40,7 +40,8 @@ type Filter struct {
 	// User Property Fields
 	Property string      `json:"property"`
 	Operator string      `json:"operator"`
-	Value    interface{} `json:"value"` // Can be string or number
+	Value    interface{} `json:"value"`    // Can be string or number
+	CohortID interface{} `json:"cohortId"` // Used by modern frontend for cohort filtering
 
 	// Event Filter Fields
 	BehaviorType string `json:"behaviorType"` // "did" or "did_not"
@@ -167,8 +168,10 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	// Parse and apply filters
 	filtersJSON := c.Query("filters", "")
 	if filtersJSON != "" {
+		log.Printf("DEBUG ListPeople: Raw filtersJSON: %s", filtersJSON)
 		var filters []Filter
 		if err := json.Unmarshal([]byte(filtersJSON), &filters); err == nil {
+			log.Printf("DEBUG ListPeople: Parsed filters: %+v", filters)
 			for _, f := range filters {
 
 				// --- User Property Filters ---
@@ -358,8 +361,11 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 				} else if f.FilterType == "cohort" {
 					// --- Cohort Filters ---
 					cohortIDStr := fmt.Sprintf("%v", f.Value)
+					if f.CohortID != nil {
+						cohortIDStr = fmt.Sprintf("%v", f.CohortID)
+					}
 					var cohort database.Cohort
-					if err := h.DB.First(&cohort, cohortIDStr).Error; err != nil {
+					if err := h.DB.First(&cohort, "id = ?", cohortIDStr).Error; err != nil {
 						log.Println("Cohort not found:", cohortIDStr)
 						continue
 					}
@@ -375,7 +381,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						// Dynamic Cohort: Parse AST and Build SQL
 						var ast CohortAST
 						if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
-							cohortSQL, cohortArgs = BuildCohortSQL(projID, environment, ast)
+							cohortSQL, cohortArgs = BuildCohortSQL(h.DB, projID, environment, ast)
 						} else {
 							log.Println("Failed to parse cohort rules:", err)
 						}
@@ -392,7 +398,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 				}
 			}
 		} else {
-			log.Println("Failed to parse filters:", err)
+			log.Printf("Failed to parse filters: %v. Raw json: %s", err, filtersJSON)
 		}
 	}
 

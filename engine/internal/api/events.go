@@ -373,7 +373,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							} else {
 								var ast CohortAST
 								if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
-									cohortSQL, cohortArgs = BuildCohortSQL(projID, environment, ast)
+									cohortSQL, cohortArgs = BuildCohortSQL(h.DB, projID, environment, ast)
 								}
 							}
 

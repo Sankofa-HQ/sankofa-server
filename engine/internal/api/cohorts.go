@@ -42,7 +42,7 @@ type CohortAST struct {
 // --- SQL BUILDER ---
 
 // buildFiltersSQL builds the sql queries for a specific group of filters
-func buildFiltersSQL(projectID string, env string, filters []Filter, logic string) (string, []interface{}) {
+func buildFiltersSQL(db *gorm.DB, projectID string, env string, filters []Filter, logic string) (string, []interface{}) {
 	var subqueries []string
 	var args []interface{}
 
@@ -50,6 +50,46 @@ func buildFiltersSQL(projectID string, env string, filters []Filter, logic strin
 		// Base Subquery for a filter is a selection of distinct_ids that meet the conditions
 		subQuery := "SELECT distinct_id FROM persons WHERE project_id = ? AND environment = ?"
 		subArgs := []interface{}{projectID, env}
+
+		if f.FilterType == "cohort" {
+			cohortIDStr := fmt.Sprintf("%v", f.Value)
+			if f.CohortID != nil {
+				cohortIDStr = fmt.Sprintf("%v", f.CohortID)
+			}
+
+			var nestedCohort database.Cohort
+			if err := db.First(&nestedCohort, "id = ?", cohortIDStr).Error; err != nil {
+				log.Println("Nested cohort not found:", cohortIDStr)
+				continue
+			}
+
+			var nestedCohortSQL string
+			var nestedCohortArgs []interface{}
+
+			if nestedCohort.Type == "static" {
+				nestedCohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
+				nestedCohortArgs = []interface{}{projectID, nestedCohort.ID}
+			} else {
+				var nestedAst CohortAST
+				if err := json.Unmarshal(nestedCohort.Rules, &nestedAst); err == nil {
+					nestedCohortSQL, nestedCohortArgs = BuildCohortSQL(db, projectID, env, nestedAst)
+				} else {
+					log.Println("Failed to parse nested cohort rules:", err)
+				}
+			}
+
+			if nestedCohortSQL != "" {
+				if f.BehaviorType == "did_not" {
+					subQuery += fmt.Sprintf(" AND distinct_id NOT IN (%s)", nestedCohortSQL)
+				} else {
+					subQuery += fmt.Sprintf(" AND distinct_id IN (%s)", nestedCohortSQL)
+				}
+				subArgs = append(subArgs, nestedCohortArgs...)
+				subqueries = append(subqueries, subQuery)
+				args = append(args, subArgs...)
+			}
+			continue
+		}
 
 		if f.FilterType == "user_property" {
 			if f.Property == "" {
@@ -178,7 +218,7 @@ func buildFiltersSQL(projectID string, env string, filters []Filter, logic strin
 }
 
 // BuildCohortSQL translates the JSON AST into a ClickHouse subquery
-func BuildCohortSQL(projectID string, env string, ast CohortAST) (string, []interface{}) {
+func BuildCohortSQL(db *gorm.DB, projectID string, env string, ast CohortAST) (string, []interface{}) {
 	if env == "" {
 		env = "live"
 	}
@@ -191,14 +231,14 @@ func BuildCohortSQL(projectID string, env string, ast CohortAST) (string, []inte
 			if groupLogic == "" {
 				groupLogic = "AND"
 			}
-			gSQL, gArgs := buildFiltersSQL(projectID, env, group.Filters, groupLogic)
+			gSQL, gArgs := buildFiltersSQL(db, projectID, env, group.Filters, groupLogic)
 			if gSQL != "(SELECT '' WHERE 1=0)" {
 				groupQueries = append(groupQueries, gSQL)
 				finalArgs = append(finalArgs, gArgs...)
 			}
 		}
 	} else if len(ast.Filters) > 0 {
-		gSQL, gArgs := buildFiltersSQL(projectID, env, ast.Filters, ast.Logic)
+		gSQL, gArgs := buildFiltersSQL(db, projectID, env, ast.Filters, ast.Logic)
 		if gSQL != "(SELECT '' WHERE 1=0)" {
 			groupQueries = append(groupQueries, gSQL)
 			finalArgs = append(finalArgs, gArgs...)
