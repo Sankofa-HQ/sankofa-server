@@ -400,7 +400,7 @@ func (h *CohortsHandler) GetCohort(c *fiber.Ctx) error {
 
 func (h *CohortsHandler) DeleteCohort(c *fiber.Ctx) error {
 	id := c.Params("id")
-	if err := h.DB.Delete(&database.Cohort{}, id).Error; err != nil {
+	if err := h.DB.Delete(&database.Cohort{}, "id = ?", id).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete cohort"})
 	}
 	return c.SendStatus(204)
