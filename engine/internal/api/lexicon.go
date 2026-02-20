@@ -195,18 +195,15 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 		props = append(props, p)
 	}
 
-	// Sync with ClickHouse
-	environment := c.Query("environment", "live")
-
 	// Query to get keys from recent events
 	// Using mapKeys to get property names
 	query := `
 		SELECT DISTINCT arrayJoin(mapKeys(properties)) as key
 		FROM events
-		WHERE project_id = ? AND environment = ?
+		WHERE project_id = ?
 		LIMIT 1000
 	`
-	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
+	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID))
 	if err != nil {
 		log.Println("⚠️ ClickHouse Property Sync Error:", err)
 		// Return what we have in DB even if sync fails
@@ -314,17 +311,15 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 	}
 
 	// Sync from 'persons' table
-	environment := c.Query("environment", "live")
-
 	// Only sync User properties for now, Company requires different logic/table
 	if entityType == "User" {
 		query := `
 			SELECT arrayJoin(mapKeys(properties)) as key
 			FROM persons
-			WHERE project_id = ? AND environment = ?
+			WHERE project_id = ?
 			LIMIT 1000
 		`
-		rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
+		rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID))
 		if err == nil {
 			defer rows.Close()
 			knownMap := make(map[string]bool)
