@@ -63,9 +63,9 @@ func (p *LexiconEventProperty) BeforeCreate(tx *gorm.DB) (err error) {
 // LexiconProfileProperty represents a property associated with a User or Company profile.
 type LexiconProfileProperty struct {
 	ID           string      `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	ProjectID    string      `gorm:"not null;index;type:varchar(32)" json:"project_id"`
-	EntityType   string      `gorm:"default:'User'" json:"entity_type"` // 'User' or 'Company'
-	Name         string      `gorm:"not null;index" json:"name"`        // The raw property name (e.g., "email", "plan")
+	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_profile_prop_name;type:varchar(32)" json:"project_id"`
+	EntityType   string      `gorm:"default:'User';uniqueIndex:idx_project_profile_prop_name" json:"entity_type"` // 'User' or 'Company'
+	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_profile_prop_name" json:"name"`        // The raw property name (e.g., "email", "plan")
 	DisplayName  string      `json:"display_name"`
 	Description  string      `json:"description"`
 	ExampleValue string      `json:"example_value"`

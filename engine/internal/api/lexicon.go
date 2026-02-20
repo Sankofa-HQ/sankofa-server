@@ -65,7 +65,7 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 	query := `
 		SELECT DISTINCT event_name
 		FROM events
-		WHERE tenant_id = ? AND environment = ?
+		WHERE project_id = ? AND environment = ?
 	`
 	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
 	if err != nil {
@@ -203,7 +203,7 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 	query := `
 		SELECT DISTINCT arrayJoin(mapKeys(properties)) as key
 		FROM events
-		WHERE tenant_id = ? AND environment = ?
+		WHERE project_id = ? AND environment = ?
 		LIMIT 1000
 	`
 	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
@@ -321,7 +321,7 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 		query := `
 			SELECT arrayJoin(mapKeys(properties)) as key
 			FROM persons
-			WHERE tenant_id = ? AND environment = ?
+			WHERE project_id = ? AND environment = ?
 			LIMIT 1000
 		`
 		rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
@@ -354,9 +354,14 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 			}
 
 			if len(newProps) > 0 {
-				h.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&newProps)
-				h.DB.Where("project_id = ? AND entity_type = ?", project.ID, entityType).Find(&props)
+				if err := h.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&newProps).Error; err != nil {
+					log.Println("⚠️ Failed to insert new Profile Properties:", err)
+				} else {
+					h.DB.Where("project_id = ? AND entity_type = ?", project.ID, entityType).Find(&props)
+				}
 			}
+		} else {
+			log.Println("⚠️ ClickHouse Profile Property Sync Error:", err)
 		}
 	}
 
