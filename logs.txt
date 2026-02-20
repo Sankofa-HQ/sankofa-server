@@ -1,0 +1,18 @@
+2026/02/20 10:41:56 ✅ Loaded .env from current directory
+2026/02/20 10:41:56 ✅ Lexicon Cache Loaded: 0 events
+2026/02/20 10:41:56 ✅ Lexicon Property Cache Loaded: 0 properties
+2026/02/20 10:41:56 🚀 Lexicon Gatekeeper Worker Started
+✅ Plans Seeded
+2026/02/20 10:41:56 ✅ Connected to ClickHouse
+🚀 Sankofa Engine running on :8080
+
+2026/02/20 10:42:12 [31;1m/Users/saytoonz/Developer/Projects/Sankofa/server/engine/internal/api/cohort_preview.go:36 [35;1mrecord not found
+[0m[33m[1.172ms] [34;1m[rows:0][0m SELECT * FROM `projects` WHERE `projects`.`id` = 3 ORDER BY `projects`.`id` LIMIT 1
+2026/02/20 10:43:00 DEBUG COHORT PREVIEW SQL: ((SELECT distinct_id FROM (SELECT distinct_id, argMax(properties, last_seen) AS props FROM persons WHERE project_id = ? AND environment = ? GROUP BY distinct_id) p WHERE 1=1 AND p.props['Email'] = ? INTERSECT SELECT distinct_id FROM (SELECT distinct_id, argMax(properties, last_seen) AS props FROM persons WHERE project_id = ? AND environment = ? GROUP BY distinct_id) p WHERE 1=1 AND p.props['Ltv'] = ?) UNION DISTINCT (SELECT distinct_id FROM (SELECT distinct_id, argMax(properties, last_seen) AS props FROM persons WHERE project_id = ? AND environment = ? GROUP BY distinct_id) p WHERE 1=1 AND NOT mapContains(p.props, 'Email')))
+2026/02/20 10:43:00 DEBUG COHORT PREVIEW ARGS: [1 test user@example.com 1 test 105 1 test]
+
+2026/02/20 10:46:58 [31;1m/Users/saytoonz/Developer/Projects/Sankofa/server/engine/internal/api/cohort_preview.go:36 [35;1mrecord not found
+[0m[33m[24.134ms] [34;1m[rows:0][0m SELECT * FROM `projects` WHERE `projects`.`id` = 3 ORDER BY `projects`.`id` LIMIT 1
+
+🛑 Shutdown signal received. Draining buffer...
+✅ Buffer drained. Exiting.

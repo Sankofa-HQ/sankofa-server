@@ -375,7 +375,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						// Dynamic Cohort: Parse AST and Build SQL
 						var ast CohortAST
 						if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
-							cohortSQL, cohortArgs = BuildCohortSQL(projID, ast)
+							cohortSQL, cohortArgs = BuildCohortSQL(projID, environment, ast)
 						} else {
 							log.Println("Failed to parse cohort rules:", err)
 						}

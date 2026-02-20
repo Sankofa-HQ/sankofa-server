@@ -27,101 +27,195 @@ func NewCohortsHandler(db *gorm.DB, ch driver.Conn) *CohortsHandler {
 
 // --- AST STRUCTS ---
 
-type CohortAST struct {
-	Logic   string         `json:"logic"` // "AND", "OR"
-	Filters []CohortFilter `json:"filters"`
+type CohortASTGroup struct {
+	ID      string   `json:"id"`
+	Logic   string   `json:"logic"` // "AND", "OR"
+	Filters []Filter `json:"filters"`
 }
 
-type CohortFilter struct {
-	Type          string      `json:"type"` // "event", "user_property"
-	EventName     string      `json:"event_name,omitempty"`
-	TimeframeDays int         `json:"timeframe_days,omitempty"`
-	PropertyName  string      `json:"property_name,omitempty"`
-	Operator      string      `json:"operator"`
-	Value         interface{} `json:"value"`
+type CohortAST struct {
+	Logic   string           `json:"logic"` // "AND", "OR"
+	Groups  []CohortASTGroup `json:"groups"`
+	Filters []Filter         `json:"filters"` // Fallback or flat array
 }
 
 // --- SQL BUILDER ---
 
-// BuildCohortSQL translates the JSON AST into a ClickHouse subquery
-func BuildCohortSQL(projectID string, ast CohortAST) (string, []interface{}) {
+// buildFiltersSQL builds the sql queries for a specific group of filters
+func buildFiltersSQL(projectID string, env string, filters []Filter, logic string) (string, []interface{}) {
 	var subqueries []string
 	var args []interface{}
 
-	for _, filter := range ast.Filters {
-		if filter.Type == "event" {
-			// e.g., "Users who did 'Checkout' >= 3 times in 30 days"
-			query := `
-				SELECT distinct_id 
-				FROM events 
-				WHERE project_id = ? 
-				AND event_name = ? 
-				AND timestamp >= now() - INTERVAL ? DAY 
-				GROUP BY distinct_id 
-				HAVING count() %s ?`
+	for _, f := range filters {
+		// Base Subquery for a filter is a selection of distinct_ids that meet the conditions
+		subQuery := "SELECT distinct_id FROM persons WHERE project_id = ? AND environment = ?"
+		subArgs := []interface{}{projectID, env}
 
-			// Inject the operator safely
-			op := filter.Operator
-			if op != ">" && op != "<" && op != ">=" && op != "<=" && op != "=" && op != "!=" {
-				op = ">=" // Default safe
-			}
-
-			query = fmt.Sprintf(query, op)
-			subqueries = append(subqueries, query)
-
-			args = append(args, projectID, filter.EventName, filter.TimeframeDays, filter.Value)
-
-		} else if filter.Type == "user_property" {
-			// e.g., "Users where country == 'Ghana'"
-			// Note: We use JSONExtractString assuming properties are stored as JSON Maps in ClickHouse
-			// Actually, in `persons` table, properties are `Map(String, String)`.
-			// So we use simple map access: properties['key']
-
-			query := `
-				SELECT distinct_id 
-				FROM persons 
-				WHERE project_id = ? 
-				AND properties[?] %s ?`
-
-			// Adjust operator (e.g., "==" in JSON becomes "=" in SQL)
-			sqlOperator := filter.Operator
-			if sqlOperator == "==" {
-				sqlOperator = "="
-			}
-			// Whitelist operators
-			if sqlOperator != "=" && sqlOperator != "!=" && sqlOperator != "LIKE" && sqlOperator != "ILIKE" {
-				sqlOperator = "="
-			}
-
-			// Handle "contains"
-			if filter.Operator == "contains" {
-				query = `SELECT distinct_id FROM persons WHERE project_id = ? AND positionCaseInsensitive(properties[?], ?) > 0`
-				subqueries = append(subqueries, query)
-				args = append(args, projectID, filter.PropertyName, filter.Value)
+		if f.FilterType == "user_property" {
+			if f.Property == "" {
 				continue
 			}
+			valStr := fmt.Sprintf("%v", f.Value)
 
-			query = fmt.Sprintf(query, sqlOperator)
-			subqueries = append(subqueries, query)
+			// To check property without requiring full base table struct, use map schema
+			subQuery = `SELECT distinct_id FROM (SELECT distinct_id, argMax(properties, last_seen) AS props FROM persons WHERE project_id = ? AND environment = ? GROUP BY distinct_id) p WHERE 1=1`
 
-			args = append(args, projectID, filter.PropertyName, filter.Value)
+			switch f.Operator {
+			case "is":
+				subQuery += fmt.Sprintf(" AND p.props['%s'] = ?", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "is_not":
+				subQuery += fmt.Sprintf(" AND p.props['%s'] != ?", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "contains":
+				subQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.props['%s'], ?) > 0", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "does_not_contain":
+				subQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.props['%s'], ?) = 0", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "is_set":
+				subQuery += fmt.Sprintf(" AND mapContains(p.props, '%s')", sanitizeKey(f.Property))
+			case "is_not_set":
+				subQuery += fmt.Sprintf(" AND NOT mapContains(p.props, '%s')", sanitizeKey(f.Property))
+			case "gt":
+				subQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "lt":
+				subQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "gte":
+				subQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			case "lte":
+				subQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
+				subArgs = append(subArgs, valStr)
+			}
+
+			subqueries = append(subqueries, subQuery)
+			args = append(args, subArgs...)
+
+		} else if f.FilterType == "event" {
+			eventSub := `SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name = ?`
+			eventArgs := []interface{}{projectID, env, f.EventName}
+
+			// Time range
+			var timeSeconds int64 = 30 * 86400 // Default 30d
+			if f.TimeRange == "all" {
+				timeSeconds = 0
+			} else if len(f.TimeRange) > 0 {
+				val, _ := strconv.Atoi(f.TimeRange[:len(f.TimeRange)-1])
+				unit := f.TimeRange[len(f.TimeRange)-1]
+				switch unit {
+				case 'h':
+					timeSeconds = int64(val) * 3600
+				case 'd':
+					timeSeconds = int64(val) * 86400
+				case 'm':
+					timeSeconds = int64(val) * 86400 * 30
+				}
+			}
+
+			if timeSeconds > 0 {
+				eventSub += ` AND timestamp >= now() - INTERVAL ? SECOND`
+				eventArgs = append(eventArgs, timeSeconds)
+			}
+
+			// Metric Operator
+			metricOp := ">="
+			switch f.Operator {
+			case "gt":
+				metricOp = ">"
+			case "lt":
+				metricOp = "<"
+			case "gte":
+				metricOp = ">="
+			case "lte":
+				metricOp = "<="
+			case "eq":
+				metricOp = "="
+			case "neq":
+				metricOp = "!="
+			}
+
+			valFloat := 0.0
+			if v, ok := f.Value.(float64); ok {
+				valFloat = v
+			} else if v, ok := f.Value.(string); ok {
+				valFloat, _ = strconv.ParseFloat(v, 64)
+			} else if v, ok := f.Value.(int); ok {
+				valFloat = float64(v)
+			}
+
+			havingClause := fmt.Sprintf("count() %s ?", metricOp)
+			eventSub += " GROUP BY distinct_id HAVING " + havingClause
+			eventArgs = append(eventArgs, valFloat)
+
+			// Resolve "did" vs "did_not"
+			if f.BehaviorType == "did" {
+				subqueries = append(subqueries, eventSub)
+				args = append(args, eventArgs...)
+			} else {
+				// DID NOT is all persons minus the subquery
+				inverseQuery := fmt.Sprintf(`SELECT distinct_id FROM persons WHERE project_id = ? AND environment = ? AND distinct_id NOT IN (%s)`, eventSub)
+				invArgs := []interface{}{projectID, env}
+				invArgs = append(invArgs, eventArgs...)
+				subqueries = append(subqueries, inverseQuery)
+				args = append(args, invArgs...)
+			}
 		}
 	}
 
 	if len(subqueries) == 0 {
-		return "SELECT ''", nil // Return empty set if no filters
+		return "(SELECT '' WHERE 1=0)", nil // Return empty set if no filters
 	}
 
-	// Join the subqueries based on the root Logic
 	joiner := " INTERSECT "
-	if ast.Logic == "OR" {
+	if logic == "OR" {
 		joiner = " UNION DISTINCT "
 	}
 
-	// Wrap the whole thing in parentheses so it can be used as a subquery
-	finalSQL := fmt.Sprintf("(%s)", strings.Join(subqueries, joiner))
+	return fmt.Sprintf("(%s)", strings.Join(subqueries, joiner)), args
+}
 
-	return finalSQL, args
+// BuildCohortSQL translates the JSON AST into a ClickHouse subquery
+func BuildCohortSQL(projectID string, env string, ast CohortAST) (string, []interface{}) {
+	if env == "" {
+		env = "live"
+	}
+	var groupQueries []string
+	var finalArgs []interface{}
+
+	if len(ast.Groups) > 0 {
+		for _, group := range ast.Groups {
+			groupLogic := group.Logic
+			if groupLogic == "" {
+				groupLogic = "AND"
+			}
+			gSQL, gArgs := buildFiltersSQL(projectID, env, group.Filters, groupLogic)
+			if gSQL != "(SELECT '' WHERE 1=0)" {
+				groupQueries = append(groupQueries, gSQL)
+				finalArgs = append(finalArgs, gArgs...)
+			}
+		}
+	} else if len(ast.Filters) > 0 {
+		gSQL, gArgs := buildFiltersSQL(projectID, env, ast.Filters, ast.Logic)
+		if gSQL != "(SELECT '' WHERE 1=0)" {
+			groupQueries = append(groupQueries, gSQL)
+			finalArgs = append(finalArgs, gArgs...)
+		}
+	}
+
+	if len(groupQueries) == 0 {
+		return "(SELECT distinct_id FROM persons WHERE project_id = ? AND environment = ?)", []interface{}{projectID, env}
+	}
+
+	joiner := " INTERSECT "
+	rootLogic := ast.Logic
+	if rootLogic == "OR" {
+		joiner = " UNION DISTINCT "
+	}
+
+	return fmt.Sprintf("(%s)", strings.Join(groupQueries, joiner)), finalArgs
 }
 
 // --- HANDLERS ---
@@ -270,6 +364,62 @@ func (h *CohortsHandler) DeleteCohort(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete cohort"})
 	}
 	return c.SendStatus(204)
+}
+
+func (h *CohortsHandler) UpdateCohort(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var cohort database.Cohort
+	if err := h.DB.First(&cohort, id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Cohort not found"})
+	}
+
+	var req struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Rules       json.RawMessage `json:"rules"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	cohort.Name = req.Name
+	cohort.Description = req.Description
+	if len(req.Rules) > 0 {
+		cohort.Rules = req.Rules
+	}
+	cohort.UpdatedAt = time.Now()
+
+	if err := h.DB.Save(&cohort).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update cohort"})
+	}
+
+	// Reload to get CreatedBy User
+	h.DB.Preload("CreatedBy").First(&cohort, cohort.ID)
+
+	creatorName := "Team"
+	if cohort.CreatedBy != nil {
+		creatorName = cohort.CreatedBy.FullName
+		if creatorName == "" {
+			creatorName = cohort.CreatedBy.Email
+		}
+	}
+
+	// Build enriched response
+	res := fiber.Map{
+		"id":            cohort.ID,
+		"name":          cohort.Name,
+		"description":   cohort.Description,
+		"type":          cohort.Type,
+		"rules":         string(cohort.Rules),
+		"created_at":    cohort.CreatedAt.Format("Jan 02, 2006"),
+		"updated_at":    cohort.UpdatedAt.Format("Jan 02, 2006"),
+		"created_by_id": cohort.CreatedByID,
+		"creator_name":  creatorName,
+	}
+
+	return c.JSON(res)
 }
 
 // AddMembers (Static)

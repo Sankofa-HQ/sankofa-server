@@ -222,6 +222,7 @@ func main() {
 	v1.Get("/cohorts", middleware.RequireAuth, cohortsHandler.ListCohorts)
 	v1.Post("/cohorts/preview", middleware.RequireAuth, cohortsHandler.PreviewCohort)
 	v1.Get("/cohorts/:id", middleware.RequireAuth, cohortsHandler.GetCohort)
+	v1.Put("/cohorts/:id", middleware.RequireAuth, cohortsHandler.UpdateCohort)
 	v1.Delete("/cohorts/:id", middleware.RequireAuth, cohortsHandler.DeleteCohort)
 	v1.Post("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.AddMembers)
 	v1.Delete("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.RemoveMembers)
