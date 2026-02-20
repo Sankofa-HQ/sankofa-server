@@ -414,7 +414,7 @@ func (h *LexiconHandler) getProjectFromContext(c *fiber.Ctx) (*database.Project,
 	// Re-using logic from other handlers or making a helper
 	// For now, duplicate safe logic:
 
-	userID, ok := c.Locals("user_id").(uint)
+	userID, ok := c.Locals("user_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("Unauthorized")
 	}
