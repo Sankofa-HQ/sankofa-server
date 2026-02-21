@@ -247,21 +247,10 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 					// --- Event Filters ---
 					// Users who DID / DID NOT do [Event] [Metric Operator Value] in [TimeRange]
 
-					// 1. Calculate time range seconds
-					var timeSeconds int64 = 30 * 86400 // Default 30d
-					if f.TimeRange == "all" {
-						timeSeconds = 0
-					} else if len(f.TimeRange) > 0 {
-						val, _ := strconv.Atoi(f.TimeRange[:len(f.TimeRange)-1])
-						unit := f.TimeRange[len(f.TimeRange)-1]
-						switch unit {
-						case 'h':
-							timeSeconds = int64(val) * 3600
-						case 'd':
-							timeSeconds = int64(val) * 86400
-						case 'm':
-							timeSeconds = int64(val) * 86400 * 30 // Approx month
-						}
+					// 1. Calculate time range sql
+					timeSql, timeArgs := ParseTimeRangeSql("timestamp", f.TimeRange)
+					if timeSql == "" && f.TimeRange != "all" {
+						timeSql, timeArgs = ParseTimeRangeSql("timestamp", "30d") // Default
 					}
 
 					// 2. Build Subquery for Events
@@ -270,9 +259,9 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 					subQuery := `SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name = ?`
 					subArgs := []interface{}{projID, environment, f.EventName}
 
-					if timeSeconds > 0 {
-						subQuery += ` AND timestamp >= now() - INTERVAL ? SECOND`
-						subArgs = append(subArgs, timeSeconds)
+					if timeSql != "" {
+						subQuery += " AND " + timeSql
+						subArgs = append(subArgs, timeArgs...)
 					}
 
 					// 3. Aggregation / Having Clause

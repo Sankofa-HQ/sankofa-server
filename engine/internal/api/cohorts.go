@@ -139,25 +139,13 @@ func buildFiltersSQL(db *gorm.DB, projectID string, env string, filters []Filter
 			eventArgs := []interface{}{projectID, env, f.EventName}
 
 			// Time range
-			var timeSeconds int64 = 30 * 86400 // Default 30d
-			if f.TimeRange == "all" {
-				timeSeconds = 0
-			} else if len(f.TimeRange) > 0 {
-				val, _ := strconv.Atoi(f.TimeRange[:len(f.TimeRange)-1])
-				unit := f.TimeRange[len(f.TimeRange)-1]
-				switch unit {
-				case 'h':
-					timeSeconds = int64(val) * 3600
-				case 'd':
-					timeSeconds = int64(val) * 86400
-				case 'm':
-					timeSeconds = int64(val) * 86400 * 30
-				}
+			timeSql, timeArgs := ParseTimeRangeSql("timestamp", f.TimeRange)
+			if timeSql == "" && f.TimeRange != "all" {
+				timeSql, timeArgs = ParseTimeRangeSql("timestamp", "30d") // Default
 			}
-
-			if timeSeconds > 0 {
-				eventSub += ` AND timestamp >= now() - INTERVAL ? SECOND`
-				eventArgs = append(eventArgs, timeSeconds)
+			if timeSql != "" {
+				eventSub += " AND " + timeSql
+				eventArgs = append(eventArgs, timeArgs...)
 			}
 
 			// Metric Operator

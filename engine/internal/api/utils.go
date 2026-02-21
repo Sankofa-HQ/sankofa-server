@@ -1,0 +1,90 @@
+package api
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// ParseTimeRangeSql parses a time range string and returns an SQL condition and its arguments.
+// Supported formats:
+// - "all" -> ""
+// - "30d", "24h" (legacy) -> "col >= now() - INTERVAL ? SECOND"
+// - "last_30_days", "last_24_hours" -> "col >= now() - INTERVAL ? DAY" (etc)
+// - "since_2024-01-01" -> "col >= parseDateTimeBestEffort(?)"
+// - "fixed_2024-01-01_2024-02-01" -> "col >= parseDateTimeBestEffort(?) AND col <= parseDateTimeBestEffort(?)"
+func ParseTimeRangeSql(colName string, timeStr string) (string, []interface{}) {
+	if timeStr == "all" || timeStr == "" {
+		return "", nil
+	}
+
+	if strings.HasPrefix(timeStr, "last_") {
+		parts := strings.Split(timeStr, "_")
+		if len(parts) == 3 {
+			val, err := strconv.Atoi(parts[1])
+			if err == nil {
+				unit := strings.ToUpper(parts[2])
+				// Standardize ClickHouse interval units
+				switch unit {
+				case "HOURS", "HOUR":
+					unit = "HOUR"
+				case "DAYS", "DAY":
+					unit = "DAY"
+				case "WEEKS", "WEEK":
+					unit = "WEEK"
+				case "MONTHS", "MONTH":
+					unit = "MONTH"
+				case "YEARS", "YEAR":
+					unit = "YEAR"
+				default:
+					unit = "DAY"
+				}
+				return fmt.Sprintf("%s >= now() - INTERVAL ? %s", colName, unit), []interface{}{val}
+			}
+		}
+	}
+
+	if strings.HasPrefix(timeStr, "since_") {
+		startStr := strings.TrimPrefix(timeStr, "since_")
+		return fmt.Sprintf("%s >= parseDateTimeBestEffort(?)", colName), []interface{}{startStr}
+	}
+
+	if strings.HasPrefix(timeStr, "fixed_") {
+		rangeStr := strings.TrimPrefix(timeStr, "fixed_")
+		parts := strings.Split(rangeStr, "_")
+		if len(parts) >= 2 {
+			// handle case where ISO dates might have underscores (they usually don't though, usually T or spaces)
+			// But splitting by standard `YYYY-MM-DDTHH:mm:ss.000Z_YYYY-MM...`
+			// So parts[0] is start, everything after first `_` is end if we just use strings.SplitN
+			// Let's use SplitN
+			parts = strings.SplitN(rangeStr, "_", 2)
+			startStr := parts[0]
+			endStr := parts[1]
+			return fmt.Sprintf("%s >= parseDateTimeBestEffort(?) AND %s <= parseDateTimeBestEffort(?)", colName, colName), []interface{}{startStr, endStr}
+		}
+	}
+
+	// Legacy fallback (e.g. "30d", "24h", "12m")
+	var timeSeconds int64 = 0
+	val, err := strconv.Atoi(timeStr[:len(timeStr)-1])
+	if err == nil {
+		unit := timeStr[len(timeStr)-1]
+		switch unit {
+		case 'h':
+			timeSeconds = int64(val) * 3600
+		case 'd':
+			timeSeconds = int64(val) * 86400
+		case 'm': // Could be minutes or months, legacy usually meant months for "12m", or minutes?
+			if val == 6 || val == 12 {
+				timeSeconds = int64(val) * 86400 * 30 // Approx months
+			} else {
+				timeSeconds = int64(val) * 60 // Minutes
+			}
+		}
+		if timeSeconds > 0 {
+			return fmt.Sprintf("%s >= now() - INTERVAL ? SECOND", colName), []interface{}{timeSeconds}
+		}
+	}
+
+	return "", nil
+}
