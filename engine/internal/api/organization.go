@@ -630,7 +630,8 @@ func (h *OrganizationHandler) CreateTeam(c *fiber.Ctx) error {
 	orgID, _ := c.Locals("org_id").(string)
 
 	type Request struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
@@ -640,6 +641,7 @@ func (h *OrganizationHandler) CreateTeam(c *fiber.Ctx) error {
 	team := database.Team{
 		OrganizationID: orgID,
 		Name:           req.Name,
+		Description:    req.Description,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -704,7 +706,8 @@ func (h *OrganizationHandler) UpdateTeam(c *fiber.Ctx) error {
 	}
 
 	type Request struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
@@ -717,6 +720,7 @@ func (h *OrganizationHandler) UpdateTeam(c *fiber.Ctx) error {
 	}
 
 	team.Name = req.Name
+	team.Description = req.Description
 	team.UpdatedAt = time.Now()
 
 	if err := h.DB.Save(&team).Error; err != nil {

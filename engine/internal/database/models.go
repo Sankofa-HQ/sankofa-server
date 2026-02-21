@@ -140,6 +140,7 @@ type Team struct {
 	ID             string    `gorm:"primaryKey;type:varchar(32)" json:"id"`
 	OrganizationID string    `gorm:"not null;index;type:varchar(32)" json:"organization_id"`
 	Name           string    `gorm:"not null" json:"name"`
+	Description    string    `json:"description"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
