@@ -22,7 +22,9 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 		if err := h.DB.First(&project, "id = ?", projectIDStr).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
-		// TODO: Check if user has access to project
+		if !checkProjectAccess(h.DB, &project, userID) {
+			return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
+		}
 	} else {
 		var user database.User
 		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
@@ -33,6 +35,10 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 		}
 		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+
+		if !checkProjectAccess(h.DB, &project, userID) {
+			return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
 		}
 	}
 

@@ -606,6 +606,17 @@ func (h *OrganizationHandler) RemoveMember(c *fiber.Ctx) error {
 		}
 	}
 
+	// 3. Remove from all Teams in this Organization
+	var teamIDs []string
+	tx.Model(&database.Team{}).Where("organization_id = ?", orgID).Pluck("id", &teamIDs)
+
+	if len(teamIDs) > 0 {
+		if err := tx.Where("team_id IN ? AND user_id = ?", teamIDs, targetUserID).Delete(&database.TeamMember{}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to remove team memberships"})
+		}
+	}
+
 	tx.Commit()
 
 	return c.SendStatus(http.StatusOK)

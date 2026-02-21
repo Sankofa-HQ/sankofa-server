@@ -99,6 +99,32 @@ func (h *EventsHandler) resolveAllAliasedIDs(projID, environment, startID string
 	return result
 }
 
+// checkProjectAccess verifies if a user has RBAC clearance for a specific project.
+// Returns true if access is allowed, false otherwise.
+func checkProjectAccess(db *gorm.DB, project *database.Project, userID string) bool {
+	var membership database.OrganizationMember
+	if err := db.Where("organization_id = ? AND user_id = ?", project.OrganizationID, userID).First(&membership).Error; err != nil {
+		return false
+	}
+
+	if membership.Role == "Owner" || membership.Role == "Admin" {
+		return true // Org owners/admins have implicit access to all projects
+	}
+
+	// Strictly verify standard member access via direct linking or team linking
+	var count int64
+	db.Raw(`
+		SELECT COUNT(DISTINCT p.id) 
+		FROM projects p 
+		LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = ?
+		LEFT JOIN team_projects tp ON p.id = tp.project_id
+		LEFT JOIN team_members tm ON tp.team_id = tm.team_id AND tm.user_id = ?
+		WHERE p.id = ? AND (pm.user_id IS NOT NULL OR tm.user_id IS NOT NULL)
+	`, userID, userID, project.ID).Scan(&count)
+
+	return count > 0
+}
+
 // TrackEvent handles the "Fast Path". Checks RAM, queues if new.
 func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	userID, ok := c.Locals("user_id").(string)
@@ -127,6 +153,11 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
+	}
+
+	// RBAC Check: Does the user have access to this project?
+	if !checkProjectAccess(h.DB, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
 	}
 
 	// Parse query parameters
@@ -505,6 +536,11 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 		}
 	}
 
+	// RBAC Check
+	if !checkProjectAccess(h.DB, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
+	}
+
 	// Fetch from Lexicon (SQLite) - The "Gatekeeper" source of truth
 	var lexiconEvents []database.LexiconEvent
 	if err := h.DB.Model(&database.LexiconEvent{}).
@@ -582,6 +618,10 @@ func (h *EventsHandler) GetEventDetail(c *fiber.Ctx) error {
 		}
 	}
 
+	if !checkProjectAccess(h.DB, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
+	}
+
 	environment := c.Query("environment", "live")
 	projID := project.ID
 
@@ -640,6 +680,10 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
+	}
+
+	if !checkProjectAccess(h.DB, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
 	}
 
 	environment := c.Query("environment", "live")
@@ -704,6 +748,10 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
+	}
+
+	if !checkProjectAccess(h.DB, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied to project events"})
 	}
 
 	environment := c.Query("environment", "live")
