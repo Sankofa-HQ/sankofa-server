@@ -32,6 +32,13 @@ func (h *ProjectHandler) RegisterRoutes(api fiber.Router, authMiddleware fiber.H
 	projects.Put("/:id", h.UpdateProject) // ?org_id=1
 	projects.Delete("/:id", h.DeleteProject)
 
+	// Access Roles endpoints
+	projects.Get("/:id/access", h.GetProjectAccess)
+	projects.Post("/:id/teams", h.AddProjectTeam)
+	projects.Delete("/:id/teams/:team_id", h.RemoveProjectTeam)
+	projects.Post("/:id/members", h.AddProjectMember)
+	projects.Delete("/:id/members/:user_id", h.RemoveProjectMember)
+
 	orgs := api.Group("/organizations", authMiddleware)
 	orgs.Get("/", h.GetOrganizations)
 }
@@ -344,4 +351,130 @@ func generateTestAPIKey() (string, error) {
 		return "", err
 	}
 	return "sk_test_" + hex.EncodeToString(bytes), nil
+}
+
+// GetProjectAccess - GET /v1/projects/:id/access
+func (h *ProjectHandler) GetProjectAccess(c *fiber.Ctx) error {
+	projectID := c.Params("id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid project ID"})
+	}
+
+	type MemberAccess struct {
+		UserID    string    `json:"user_id"`
+		FullName  string    `json:"full_name"`
+		Email     string    `json:"email"`
+		Role      string    `json:"role"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	var members []MemberAccess
+	h.DB.Table("project_members").
+		Select("users.id as user_id, users.full_name, users.email, project_members.role, project_members.created_at").
+		Joins("left join users on users.id = project_members.user_id").
+		Where("project_members.project_id = ?", projectID).
+		Scan(&members)
+
+	type TeamAccess struct {
+		TeamID    string    `json:"team_id"`
+		Name      string    `json:"name"`
+		Role      string    `json:"role"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	var teams []TeamAccess
+	h.DB.Table("team_projects").
+		Select("teams.id as team_id, teams.name, team_projects.role, team_projects.created_at").
+		Joins("left join teams on teams.id = team_projects.team_id").
+		Where("team_projects.project_id = ?", projectID).
+		Scan(&teams)
+
+	return c.JSON(fiber.Map{
+		"members": members,
+		"teams":   teams,
+	})
+}
+
+// AddProjectTeam - POST /v1/projects/:id/teams
+func (h *ProjectHandler) AddProjectTeam(c *fiber.Ctx) error {
+	projectID := c.Params("id")
+	type Req struct {
+		TeamID string `json:"team_id"`
+		Role   string `json:"role"`
+	}
+	var req Req
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.Role == "" {
+		req.Role = "Viewer" // Default
+	}
+
+	tp := database.TeamProject{
+		TeamID:    req.TeamID,
+		ProjectID: projectID,
+		Role:      req.Role,
+		CreatedAt: time.Now(),
+	}
+
+	if err := h.DB.Save(&tp).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to add team access"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Team added to project"})
+}
+
+// RemoveProjectTeam - DELETE /v1/projects/:id/teams/:team_id
+func (h *ProjectHandler) RemoveProjectTeam(c *fiber.Ctx) error {
+	projectID := c.Params("id")
+	teamID := c.Params("team_id")
+
+	if err := h.DB.Where("project_id = ? AND team_id = ?", projectID, teamID).Delete(&database.TeamProject{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove team access"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Team removed from project"})
+}
+
+// AddProjectMember - POST /v1/projects/:id/members
+func (h *ProjectHandler) AddProjectMember(c *fiber.Ctx) error {
+	projectID := c.Params("id")
+	type Req struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+	}
+	var req Req
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.Role == "" {
+		req.Role = "Viewer"
+	}
+
+	pm := database.ProjectMember{
+		UserID:    req.UserID,
+		ProjectID: projectID,
+		Role:      req.Role,
+		CreatedAt: time.Now(),
+	}
+
+	if err := h.DB.Save(&pm).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to add member access"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Member added to project"})
+}
+
+// RemoveProjectMember - DELETE /v1/projects/:id/members/:user_id
+func (h *ProjectHandler) RemoveProjectMember(c *fiber.Ctx) error {
+	projectID := c.Params("id")
+	userID := c.Params("user_id")
+
+	if err := h.DB.Where("project_id = ? AND user_id = ?", projectID, userID).Delete(&database.ProjectMember{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove member access"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Member removed from project"})
 }
