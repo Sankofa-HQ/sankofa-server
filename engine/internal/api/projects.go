@@ -31,6 +31,7 @@ func (h *ProjectHandler) RegisterRoutes(api fiber.Router, authMiddleware fiber.H
 	projects.Post("/", h.CreateProject)
 	projects.Put("/:id", h.UpdateProject) // ?org_id=1
 	projects.Delete("/:id", h.DeleteProject)
+	projects.Post("/:id/reset-key", h.ResetProjectKey)
 
 	// Access Roles endpoints
 	projects.Get("/:id/access", h.GetProjectAccess)
@@ -337,6 +338,72 @@ func (h *ProjectHandler) DeleteProject(c *fiber.Ctx) error {
 	tx.Commit()
 
 	return c.JSON(fiber.Map{"status": "ok", "message": "Project deleted successfully"})
+}
+
+// ResetProjectKey - POST /v1/projects/:id/reset-key
+func (h *ProjectHandler) ResetProjectKey(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID := c.Params("id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid project ID"})
+	}
+
+	type ResetRequest struct {
+		Env string `json:"env"` // "live" or "test"
+	}
+	var req ResetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid payload format"})
+	}
+	if req.Env != "live" && req.Env != "test" {
+		return c.Status(400).JSON(fiber.Map{"error": "env must be 'live' or 'test'"})
+	}
+
+	// 1. Verify Access (Admin or Owner role required)
+	var member database.ProjectMember
+	if err := h.DB.Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+	if member.Role != "Admin" && member.Role != "Owner" {
+		return c.Status(403).JSON(fiber.Map{"error": "Only admins can regenerate API keys"})
+	}
+
+	// 2. Fetch Project
+	var project database.Project
+	if err := h.DB.First(&project, projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+
+	// 3. Generate New Key
+	var newKey string
+	var err error
+
+	if req.Env == "live" {
+		// Use inline generation since generateAPIKey is in auth.go
+		bytes := make([]byte, 16)
+		if _, randErr := rand.Read(bytes); randErr != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to generate key"})
+		}
+		newKey = "sk_live_" + hex.EncodeToString(bytes)
+		project.APIKey = newKey
+	} else {
+		newKey, err = generateTestAPIKey()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to generate test key"})
+		}
+		project.TestAPIKey = newKey
+	}
+
+	// 4. Save
+	if err := h.DB.Save(&project).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to save new key"})
+	}
+
+	return c.JSON(project)
 }
 
 // Helper to avoid import cycles / duplication. In real app, put in utils.
