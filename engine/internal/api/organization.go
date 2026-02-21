@@ -417,9 +417,15 @@ func (h *OrganizationHandler) VerifyInvite(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invite has expired", "valid": false})
 	}
 
+	var userExists bool
+	var count int64
+	h.DB.Model(&database.User{}).Where("email = ?", invite.Email).Count(&count)
+	userExists = count > 0
+
 	return c.JSON(fiber.Map{
-		"valid": true,
-		"email": invite.Email,
+		"valid":       true,
+		"email":       invite.Email,
+		"user_exists": userExists,
 	})
 }
 
