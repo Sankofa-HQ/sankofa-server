@@ -820,34 +820,174 @@ func (h *OrganizationHandler) RemoveTeamMember(c *fiber.Ctx) error {
 	return c.SendStatus(http.StatusNoContent)
 }
 
-// AssignTeamProject - POST /v1/orgs/:org_id/teams/:team_id/projects
-func (h *OrganizationHandler) AssignTeamProject(c *fiber.Ctx) error {
+// UpdateTeamProjects - PUT /v1/orgs/:org_id/teams/:team_id/projects
+func (h *OrganizationHandler) UpdateTeamProjects(c *fiber.Ctx) error {
 	teamID := c.Params("team_id")
 	if teamID == "" {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
 	}
 
 	type Request struct {
-		ProjectID string `json:"project_id"`
-		Role      string `json:"role"`
+		ProjectIDs []string `json:"project_ids"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	tp := database.TeamProject{
-		TeamID:    teamID,
-		ProjectID: req.ProjectID,
-		Role:      req.Role,
-		CreatedAt: time.Now(),
+	tx := h.DB.Begin()
+
+	// 1. Remove existing projects for this team
+	if err := tx.Where("team_id = ?", teamID).Delete(&database.TeamProject{}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clear team projects"})
 	}
 
-	if err := h.DB.Create(&tp).Error; err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to assign project to team"})
+	// 2. Insert new projects
+	for _, pid := range req.ProjectIDs {
+		tp := database.TeamProject{
+			TeamID:    teamID,
+			ProjectID: pid,
+			Role:      "Viewer", // Teams get Viewer by default for now
+			CreatedAt: time.Now(),
+		}
+		if err := tx.Create(&tp).Error; err != nil {
+			tx.Rollback()
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to assign project to team"})
+		}
 	}
 
-	return c.JSON(tp)
+	tx.Commit()
+	return c.JSON(fiber.Map{"status": "ok", "message": "Team projects updated"})
+}
+
+// GetTeamProjects - GET /v1/orgs/:org_id/teams/:team_id/projects
+func (h *OrganizationHandler) GetTeamProjects(c *fiber.Ctx) error {
+	teamID := c.Params("team_id")
+	if teamID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
+	}
+
+	var teamProjects []database.TeamProject
+	if err := h.DB.Where("team_id = ?", teamID).Find(&teamProjects).Error; err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch team projects"})
+	}
+
+	return c.JSON(teamProjects)
+}
+
+// GetUserAccess - GET /v1/orgs/:org_id/members/:user_id/access
+func (h *OrganizationHandler) GetUserAccess(c *fiber.Ctx) error {
+	userID := c.Params("user_id")
+	orgID, _ := c.Locals("org_id").(string)
+
+	if userID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user ID"})
+	}
+
+	// 1. Get explicit projects
+	var projectMembers []database.ProjectMember
+	// Fetch ONLY projects within this org
+	h.DB.Joins("JOIN projects ON projects.id = project_members.project_id").
+		Where("project_members.user_id = ? AND projects.organization_id = ?", userID, orgID).
+		Find(&projectMembers)
+
+	var projectIDs []string
+	for _, pm := range projectMembers {
+		projectIDs = append(projectIDs, pm.ProjectID)
+	}
+
+	// 2. Get teams
+	var teamMembers []database.TeamMember
+	h.DB.Joins("JOIN teams ON teams.id = team_members.team_id").
+		Where("team_members.user_id = ? AND teams.organization_id = ?", userID, orgID).
+		Find(&teamMembers)
+
+	var teamIDs []string
+	for _, tm := range teamMembers {
+		teamIDs = append(teamIDs, tm.TeamID)
+	}
+
+	return c.JSON(fiber.Map{
+		"project_ids": projectIDs,
+		"team_ids":    teamIDs,
+	})
+}
+
+// UpdateUserAccess - PUT /v1/orgs/:org_id/members/:user_id/access
+func (h *OrganizationHandler) UpdateUserAccess(c *fiber.Ctx) error {
+	userID := c.Params("user_id")
+	orgID, _ := c.Locals("org_id").(string)
+
+	if userID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user ID"})
+	}
+
+	type Request struct {
+		ProjectIDs  []string `json:"project_ids"`
+		TeamIDs     []string `json:"team_ids"`
+		ProjectRole string   `json:"project_role"`
+	}
+	var req Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.ProjectRole == "" {
+		req.ProjectRole = "Viewer" // Fallback
+	}
+
+	tx := h.DB.Begin()
+
+	// 1. Clear explicitly assigned projects for this user in this org
+	// This is slightly tricky since project_members doesn't hold org_id.
+	// We delete project_members where project_id IS IN (projects of this org)
+	if err := tx.Exec(`
+		DELETE FROM project_members 
+		WHERE user_id = ? AND project_id IN (SELECT id FROM projects WHERE organization_id = ?)
+	`, userID, orgID).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clear existing projects"})
+	}
+
+	// 2. Clear explicit team memberships for this user in this org
+	if err := tx.Exec(`
+		DELETE FROM team_members 
+		WHERE user_id = ? AND team_id IN (SELECT id FROM teams WHERE organization_id = ?)
+	`, userID, orgID).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clear existing teams"})
+	}
+
+	// 3. Insert new Project Memberships
+	for _, pid := range req.ProjectIDs {
+		if err := tx.Create(&database.ProjectMember{
+			ProjectID: pid,
+			UserID:    userID,
+			Role:      req.ProjectRole,
+			CreatedAt: time.Now(),
+		}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to map new project"})
+		}
+	}
+
+	// 4. Insert new Team Memberships
+	for _, tid := range req.TeamIDs {
+		if err := tx.Create(&database.TeamMember{
+			TeamID:    tid,
+			UserID:    userID,
+			Role:      "Member",
+			CreatedAt: time.Now(),
+		}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to map new team"})
+		}
+	}
+
+	tx.Commit()
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "User access updated successfully"})
 }
 
 // --- Usage & Billing ---

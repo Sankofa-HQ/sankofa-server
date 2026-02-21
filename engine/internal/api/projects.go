@@ -77,15 +77,26 @@ func (h *ProjectHandler) GetProjects(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"error": "Access denied to organization"})
 	}
 
-	// Fetch projects where user is a member
-	// Query: Select P.* from Projects P join ProjectMembers PM on P.ID = PM.ProjectID where PM.UserID = ? AND P.OrganizationID = ?
+	// Fetch projects based on user role
 	var projects []database.Project
-	err := h.DB.Preload("Organization").Preload("CreatedBy").Raw(`
-		SELECT p.* 
-		FROM projects p 
-		JOIN project_members pm ON p.id = pm.project_id 
-		WHERE pm.user_id = ? AND p.organization_id = ?
-	`, userID, orgID).Find(&projects).Error
+	var err error
+
+	if membership.Role == "Owner" || membership.Role == "Admin" {
+		// Admins/Owners see all projects in the org
+		err = h.DB.Preload("Organization").Preload("CreatedBy").
+			Where("organization_id = ?", orgID).
+			Find(&projects).Error
+	} else {
+		// Standard members see explicitly assigned projects OR team-assigned projects
+		err = h.DB.Preload("Organization").Preload("CreatedBy").Raw(`
+			SELECT DISTINCT p.* 
+			FROM projects p 
+			LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = ?
+			LEFT JOIN team_projects tp ON p.id = tp.project_id
+			LEFT JOIN team_members tm ON tp.team_id = tm.team_id AND tm.user_id = ?
+			WHERE p.organization_id = ? AND (pm.user_id IS NOT NULL OR tm.user_id IS NOT NULL)
+		`, userID, userID, orgID).Find(&projects).Error
+	}
 
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch projects"})
