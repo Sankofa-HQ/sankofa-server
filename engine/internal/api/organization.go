@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"sankofa/engine/internal/database"
@@ -347,14 +348,23 @@ func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
 	// 1. Check if user exists and is already in the org
 	var user database.User
-	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err == nil {
+	if err := h.DB.Where("LOWER(email) = ?", req.Email).First(&user).Error; err == nil {
 		var count int64
 		h.DB.Model(&database.OrganizationMember{}).Where("organization_id = ? AND user_id = ?", orgID, user.ID).Count(&count)
 		if count > 0 {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "User is already a member of this organization"})
 		}
+	}
+
+	// 2. Check if an active invite already exists
+	var existingInvite database.OrganizationInvite
+	err := h.DB.Where("organization_id = ? AND LOWER(email) = ? AND accepted = ? AND expires_at > ?", orgID, req.Email, false, time.Now()).First(&existingInvite).Error
+	if err == nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "An active invite has already been sent to this email address"})
 	}
 
 	// Convert ProjectIDs and TeamIDs to JSON strings
