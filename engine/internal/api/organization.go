@@ -791,6 +791,9 @@ func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
 	}
 
 	if err := h.DB.Create(&member).Error; err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "Duplicate entry") {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "User is already a member of this team"})
+		}
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add member to team"})
 	}
 
