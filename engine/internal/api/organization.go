@@ -663,6 +663,103 @@ func (h *OrganizationHandler) GetTeams(c *fiber.Ctx) error {
 	return c.JSON(teams)
 }
 
+// GetTeamMembers - GET /v1/orgs/:org_id/teams/:team_id/members
+func (h *OrganizationHandler) GetTeamMembers(c *fiber.Ctx) error {
+	teamID := c.Params("team_id")
+	if teamID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
+	}
+
+	// Fetch team members, joined with User info for display
+	var members []struct {
+		ID        uint      `json:"id"`
+		UserID    string    `json:"user_id"`
+		TeamID    string    `json:"team_id"`
+		Role      string    `json:"role"`
+		CreatedAt time.Time `json:"created_at"`
+		FullName  string    `json:"full_name"`
+		Email     string    `json:"email"`
+	}
+
+	err := h.DB.Table("team_members").
+		Select("team_members.*, users.full_name, users.email").
+		Joins("left join users on users.id = team_members.user_id").
+		Where("team_members.team_id = ?", teamID).
+		Scan(&members).Error
+
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch team members"})
+	}
+
+	return c.JSON(members)
+}
+
+// UpdateTeam - PUT /v1/orgs/:org_id/teams/:team_id
+func (h *OrganizationHandler) UpdateTeam(c *fiber.Ctx) error {
+	teamID := c.Params("team_id")
+	orgID, _ := c.Locals("org_id").(string)
+
+	if teamID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
+	}
+
+	type Request struct {
+		Name string `json:"name"`
+	}
+	var req Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	var team database.Team
+	if err := h.DB.Where("id = ? AND organization_id = ?", teamID, orgID).First(&team).Error; err != nil {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Team not found"})
+	}
+
+	team.Name = req.Name
+	team.UpdatedAt = time.Now()
+
+	if err := h.DB.Save(&team).Error; err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update team"})
+	}
+
+	return c.JSON(team)
+}
+
+// DeleteTeam - DELETE /v1/orgs/:org_id/teams/:team_id
+func (h *OrganizationHandler) DeleteTeam(c *fiber.Ctx) error {
+	teamID := c.Params("team_id")
+	orgID, _ := c.Locals("org_id").(string)
+
+	if teamID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID"})
+	}
+
+	// Verify the team belongs to the organization
+	var team database.Team
+	if err := h.DB.Where("id = ? AND organization_id = ?", teamID, orgID).First(&team).Error; err != nil {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Team not found"})
+	}
+
+	tx := h.DB.Begin()
+
+	// Delete team members first
+	if err := tx.Where("team_id = ?", teamID).Delete(&database.TeamMember{}).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete team members"})
+	}
+
+	// Delete team
+	if err := tx.Delete(&team).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete team"})
+	}
+
+	tx.Commit()
+
+	return c.SendStatus(http.StatusNoContent)
+}
+
 // AddTeamMember - POST /v1/orgs/:org_id/teams/:team_id/members
 func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
 	teamID := c.Params("team_id")
@@ -679,8 +776,12 @@ func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// Verify team belongs to org (middleware handles org_id check, but we should check team ownership)
-	// For simplicity assumes team_id is valid for now or we trust the caller has access to the org.
+	// Check if the user is already a member
+	var count int64
+	h.DB.Model(&database.TeamMember{}).Where("team_id = ? AND user_id = ?", teamID, req.UserID).Count(&count)
+	if count > 0 {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "User is already a member of this team"})
+	}
 
 	member := database.TeamMember{
 		TeamID:    teamID,
@@ -694,6 +795,22 @@ func (h *OrganizationHandler) AddTeamMember(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(member)
+}
+
+// RemoveTeamMember - DELETE /v1/orgs/:org_id/teams/:team_id/members/:user_id
+func (h *OrganizationHandler) RemoveTeamMember(c *fiber.Ctx) error {
+	teamID := c.Params("team_id")
+	userID := c.Params("user_id")
+
+	if teamID == "" || userID == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid team ID or user ID"})
+	}
+
+	if err := h.DB.Where("team_id = ? AND user_id = ?", teamID, userID).Delete(&database.TeamMember{}).Error; err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to remove member from team"})
+	}
+
+	return c.SendStatus(http.StatusNoContent)
 }
 
 // AssignTeamProject - POST /v1/orgs/:org_id/teams/:team_id/projects

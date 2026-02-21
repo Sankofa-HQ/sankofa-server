@@ -256,7 +256,10 @@ func main() {
 	orgAdmin.Post("/invite", orgHandler.InviteMember)
 	orgAdmin.Delete("/members/:user_id", orgHandler.RemoveMember)
 	orgAdmin.Post("/teams", orgHandler.CreateTeam)
+	orgAdmin.Put("/teams/:team_id", orgHandler.UpdateTeam)
+	orgAdmin.Delete("/teams/:team_id", orgHandler.DeleteTeam)
 	orgAdmin.Post("/teams/:team_id/members", orgHandler.AddTeamMember)
+	orgAdmin.Delete("/teams/:team_id/members/:user_id", orgHandler.RemoveTeamMember)
 	orgAdmin.Post("/teams/:team_id/projects", orgHandler.AssignTeamProject)
 
 	// Read Members -> Needs Member
@@ -265,6 +268,7 @@ func main() {
 	orgMember.Get("/usage", orgHandler.GetUsage)   // Get Org Usage
 	orgMember.Get("/members", orgHandler.GetMembers)
 	orgMember.Get("/teams", orgHandler.GetTeams)
+	orgMember.Get("/teams/:team_id/members", orgHandler.GetTeamMembers)
 
 	// --- ANALYTICS HANDLERS ---
 	analytics := apiRouter.Group("/analytics")
