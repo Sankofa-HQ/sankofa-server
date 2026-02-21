@@ -198,7 +198,7 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 	// Query to get keys from recent events
 	// Using mapKeys to get property names
 	query := `
-		SELECT DISTINCT arrayJoin(mapKeys(properties)) as key
+		SELECT DISTINCT arrayJoin(arrayConcat(mapKeys(properties), mapKeys(default_properties))) as key
 		FROM events
 		WHERE project_id = ?
 		LIMIT 1000
