@@ -152,6 +152,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		Password         string `json:"password"`
 		FullName         string `json:"full_name"`
 		OrganizationName string `json:"organization_name"` // changed from organization_name
+		InviteToken      string `json:"invite_token"`      // Optional: provided if user is registering via an invite link
 	}
 	var req RegisterReq
 	if err := c.BodyParser(&req); err != nil {
@@ -189,64 +190,68 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
 	}
 
-	// 4. Create Organization
-	if req.OrganizationName == "" {
-		req.OrganizationName = req.FullName + "'s Org"
-	}
-	org := database.Organization{
-		Name:      req.OrganizationName,
-		Slug:      generateSlug(req.OrganizationName),
-		Plan:      "Free",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	if err := tx.Create(&org).Error; err != nil {
-		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create organization"})
-	}
+	var orgID string
+	if req.InviteToken == "" {
+		// 4. Create Organization
+		if req.OrganizationName == "" {
+			req.OrganizationName = req.FullName + "'s Org"
+		}
+		org := database.Organization{
+			Name:      req.OrganizationName,
+			Slug:      generateSlug(req.OrganizationName),
+			Plan:      "Free",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if err := tx.Create(&org).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to create organization"})
+		}
+		orgID = org.ID
 
-	// 5. Link User to Org (Owner)
-	if err := tx.Create(&database.OrganizationMember{
-		OrganizationID: org.ID,
-		UserID:         user.ID,
-		Role:           "Owner",
-		CreatedAt:      time.Now(),
-	}).Error; err != nil {
-		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to link user to org"})
-	}
+		// 5. Link User to Org (Owner)
+		if err := tx.Create(&database.OrganizationMember{
+			OrganizationID: org.ID,
+			UserID:         user.ID,
+			Role:           "Owner",
+			CreatedAt:      time.Now(),
+		}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to link user to org"})
+		}
 
-	// 6. Create Default Project
-	apiKey, _ := generateAPIKey()
-	project := database.Project{
-		OrganizationID: org.ID,
-		Name:           "Production", // Default name
-		APIKey:         apiKey,
-		Timezone:       "UTC",
-		Region:         "us-east-1",
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
-	}
-	if err := tx.Create(&project).Error; err != nil {
-		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create project"})
-	}
+		// 6. Create Default Project
+		apiKey, _ := generateAPIKey()
+		project := database.Project{
+			OrganizationID: org.ID,
+			Name:           "Production", // Default name
+			APIKey:         apiKey,
+			Timezone:       "UTC",
+			Region:         "us-east-1",
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+		if err := tx.Create(&project).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to create project"})
+		}
 
-	// 7. Link User to Project (Admin)
-	if err := tx.Create(&database.ProjectMember{
-		ProjectID: project.ID,
-		UserID:    user.ID,
-		Role:      "Admin",
-		CreatedAt: time.Now(),
-	}).Error; err != nil {
-		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to link user to project"})
-	}
+		// 7. Link User to Project (Admin)
+		if err := tx.Create(&database.ProjectMember{
+			ProjectID: project.ID,
+			UserID:    user.ID,
+			Role:      "Admin",
+			CreatedAt: time.Now(),
+		}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to link user to project"})
+		}
 
-	// Update user's current project ID
-	if err := tx.Model(&user).Update("current_project_id", project.ID).Error; err != nil {
-		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to update user context"})
+		// Update user's current project ID
+		if err := tx.Model(&user).Update("current_project_id", project.ID).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to update user context"})
+		}
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -270,7 +275,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 			"id":        user.ID,
 			"email":     user.Email,
 			"full_name": user.FullName,
-			"org_id":    org.ID, // convenient for frontend
+			"org_id":    orgID, // convenient for frontend
 		},
 	})
 }

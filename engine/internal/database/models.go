@@ -92,6 +92,40 @@ type OrganizationMember struct {
 	CreatedAt      time.Time     `json:"created_at"`
 }
 
+// OrganizationInvite stores pending invitations for unregistered users.
+type OrganizationInvite struct {
+	ID             string        `gorm:"primaryKey;type:varchar(32)" json:"id"`
+	OrganizationID string        `gorm:"not null;index;type:varchar(32)" json:"organization_id"`
+	Organization   *Organization `json:"organization" gorm:"foreignKey:OrganizationID"`
+	Email          string        `gorm:"not null;index" json:"email"`
+	Role           string        `gorm:"default:'Member'" json:"role"` // Org role (Owner, Member)
+	Token          string        `gorm:"uniqueIndex;not null;type:varchar(64)" json:"token"`
+	ProjectIDs     string        `gorm:"type:text" json:"project_ids"` // comma separated or JSON string
+	TeamIDs        string        `gorm:"type:text" json:"team_ids"`    // comma separated or JSON string
+	ProjectRole    string        `gorm:"default:'Viewer'" json:"project_role"`
+	ExpiresAt      time.Time     `json:"expires_at"`
+	Accepted       bool          `gorm:"default:false" json:"accepted"`
+	CreatedAt      time.Time     `json:"created_at"`
+}
+
+func (oi *OrganizationInvite) BeforeCreate(tx *gorm.DB) (err error) {
+	if oi.ID == "" {
+		id, err := gonanoid.New(21)
+		if err != nil {
+			return err
+		}
+		oi.ID = "inv_" + id
+	}
+	if oi.Token == "" {
+		token, err := gonanoid.New(32)
+		if err != nil {
+			return err
+		}
+		oi.Token = token
+	}
+	return
+}
+
 // ProjectMember controls access to Projects.
 type ProjectMember struct {
 	ProjectID string    `gorm:"primaryKey;type:varchar(32)" json:"project_id"`

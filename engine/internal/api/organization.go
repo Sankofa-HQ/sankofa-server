@@ -3,6 +3,8 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -345,99 +347,193 @@ func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	// 1. Check if user exists
+	// 1. Check if user exists and is already in the org
 	var user database.User
-	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "User not found. Invite flow for non-users not implemented."})
+	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err == nil {
+		var count int64
+		h.DB.Model(&database.OrganizationMember{}).Where("organization_id = ? AND user_id = ?", orgID, user.ID).Count(&count)
+		if count > 0 {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "User is already a member of this organization"})
 		}
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Database error"})
 	}
+
+	// Convert ProjectIDs and TeamIDs to JSON strings
+	projectIDsJSON, _ := json.Marshal(req.ProjectIDs)
+	teamIDsJSON, _ := json.Marshal(req.TeamIDs)
+
+	invite := database.OrganizationInvite{
+		OrganizationID: orgID,
+		Email:          req.Email,
+		Role:           req.OrgRole,
+		ProjectIDs:     string(projectIDsJSON),
+		TeamIDs:        string(teamIDsJSON),
+		ProjectRole:    req.ProjectRole,
+		ExpiresAt:      time.Now().AddDate(0, 0, 7), // 7 days expiration
+	}
+
+	if err := h.DB.Create(&invite).Error; err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create invite"})
+	}
+
+	// TODO: Integrate actual email service here
+	// Mock email log
+	inviteLink := fmt.Sprintf("%s/invite?token=%s", "http://localhost:3000", invite.Token)
+	log.Printf("📧 MOCK EMAIL: Sending invite to %s. Link: %s\n", req.Email, inviteLink)
+
+	return c.JSON(fiber.Map{
+		"status": "invite_sent",
+		"email":  req.Email,
+	})
+}
+
+// VerifyInvite - GET /api/v1/orgs/invite/verify?token=...
+// Used by the registration page to extract and lock the email address
+func (h *OrganizationHandler) VerifyInvite(c *fiber.Ctx) error {
+	token := c.Query("token")
+	if token == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Token is required", "valid": false})
+	}
+
+	var invite database.OrganizationInvite
+	if err := h.DB.Where("token = ?", token).First(&invite).Error; err != nil {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Invite not found or invalid", "valid": false})
+	}
+
+	if invite.Accepted {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invite already accepted", "valid": false})
+	}
+
+	if time.Now().After(invite.ExpiresAt) {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invite has expired", "valid": false})
+	}
+
+	return c.JSON(fiber.Map{
+		"valid": true,
+		"email": invite.Email,
+	})
+}
+
+// AcceptInvite - POST /api/v1/orgs/invite/accept
+func (h *OrganizationHandler) AcceptInvite(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+
+	type Request struct {
+		Token string `json:"token"`
+	}
+	var req Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	var invite database.OrganizationInvite
+	if err := h.DB.Where("token = ?", req.Token).First(&invite).Error; err != nil {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Invite not found or invalid"})
+	}
+
+	if invite.Accepted {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invite already accepted"})
+	}
+
+	if time.Now().After(invite.ExpiresAt) {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invite has expired"})
+	}
+
+	// Verify user exists
+	var user database.User
+	if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	// 🚨 CRITICAL FIX: Ensure the logged-in user's email matches the invite!
+	if user.Email != invite.Email {
+		return c.Status(http.StatusForbidden).JSON(fiber.Map{"error": "This invite was sent to a different email address. Please log in with the correct account or sign up."})
+	}
+
+	// Unmarshal JSON arrays
+	var projectIDs []string
+	var teamIDs []string
+	json.Unmarshal([]byte(invite.ProjectIDs), &projectIDs)
+	json.Unmarshal([]byte(invite.TeamIDs), &teamIDs)
 
 	tx := h.DB.Begin()
 
-	// 2. Add/Update Organization Member
+	// 1. Add/Update Organization Member
 	var orgMember database.OrganizationMember
-	err := tx.Where("organization_id = ? AND user_id = ?", orgID, user.ID).First(&orgMember).Error
+	err := tx.Where("organization_id = ? AND user_id = ?", invite.OrganizationID, user.ID).First(&orgMember).Error
 	if err == gorm.ErrRecordNotFound {
-		// Create new
 		orgMember = database.OrganizationMember{
-			OrganizationID: orgID,
+			OrganizationID: invite.OrganizationID,
 			UserID:         user.ID,
-			Role:           req.OrgRole,
+			Role:           invite.Role,
 			CreatedAt:      time.Now(),
 		}
 		if err := tx.Create(&orgMember).Error; err != nil {
 			tx.Rollback()
-			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add org member"})
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to join organization"})
 		}
 	} else if err == nil {
-		// Update role if exists
-		if err := tx.Model(&orgMember).Update("role", req.OrgRole).Error; err != nil {
+		if err := tx.Model(&orgMember).Update("role", invite.Role).Error; err != nil {
 			tx.Rollback()
-			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update org member"})
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update org role"})
 		}
-	} else {
-		tx.Rollback()
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Database error checking org member"})
 	}
 
-	// 3. Loop through Project IDs and add/update Project Member
-	for _, pid := range req.ProjectIDs {
-		// Verify project belongs to org
-		var count int64
-		tx.Model(&database.Project{}).Where("id = ? AND organization_id = ?", pid, orgID).Count(&count)
-		if count == 0 {
-			continue // Skip invalid projects
-		}
-
+	// 2. Loop through Project IDs and add/update Project Member
+	for _, pid := range projectIDs {
 		var projMember database.ProjectMember
 		err := tx.Where("project_id = ? AND user_id = ?", pid, user.ID).First(&projMember).Error
 		if err == gorm.ErrRecordNotFound {
 			if err := tx.Create(&database.ProjectMember{
 				ProjectID: pid,
 				UserID:    user.ID,
-				Role:      req.ProjectRole,
+				Role:      invite.ProjectRole,
 				CreatedAt: time.Now(),
 			}).Error; err != nil {
 				tx.Rollback()
-				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add project member"})
+				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to join project"})
 			}
 		} else {
-			if err := tx.Model(&projMember).Update("role", req.ProjectRole).Error; err != nil {
+			if err := tx.Model(&projMember).Update("role", invite.ProjectRole).Error; err != nil {
 				tx.Rollback()
-				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update project member"})
+				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update project role"})
 			}
 		}
 	}
 
-	// 4. Loop through Team IDs and add/update Team Member
-	for _, tid := range req.TeamIDs {
-		// Verify team belongs to org
-		var count int64
-		tx.Model(&database.Team{}).Where("id = ? AND organization_id = ?", tid, orgID).Count(&count)
-		if count == 0 {
-			continue
-		}
-
+	// 3. Loop through Team IDs and add/update Team Member
+	for _, tid := range teamIDs {
 		var teamMember database.TeamMember
 		err := tx.Where("team_id = ? AND user_id = ?", tid, user.ID).First(&teamMember).Error
 		if err == gorm.ErrRecordNotFound {
 			if err := tx.Create(&database.TeamMember{
 				TeamID:    tid,
 				UserID:    user.ID,
-				Role:      "Member", // Default to Member for now
+				Role:      "Member",
 				CreatedAt: time.Now(),
 			}).Error; err != nil {
 				tx.Rollback()
-				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add team member"})
+				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to join team"})
 			}
 		}
 	}
 
+	// 4. Update user's current project context
+	if len(projectIDs) > 0 {
+		if err := tx.Model(&user).Update("current_project_id", projectIDs[0]).Error; err != nil {
+			tx.Rollback()
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update current project"})
+		}
+	}
+
+	// 5. Mark invite as accepted
+	if err := tx.Model(&invite).Update("accepted", true).Error; err != nil {
+		tx.Rollback()
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to mark invite accepted"})
+	}
+
 	tx.Commit()
 
-	return c.JSON(fiber.Map{"status": "invited", "user": user.Email})
+	return c.JSON(fiber.Map{"success": true, "organization": invite.Organization})
 }
 
 // GetMembers - GET /v1/orgs/:org_id/members

@@ -139,6 +139,7 @@ func main() {
 		&database.TeamMember{},
 		&database.TeamProject{},
 		&database.Plan{}, // Added Plan
+		&database.OrganizationInvite{},
 		&database.LexiconEvent{},
 		&database.LexiconEventProperty{},
 		&database.LexiconProfileProperty{},
@@ -236,6 +237,12 @@ func main() {
 
 	// Validating/Serving Static Uploads
 	app.Static("/uploads", "./uploads")
+
+	// Verify Invite (Open to unauthenticated users via token)
+	v1.Get("/orgs/invite/verify", orgHandler.VerifyInvite)
+
+	// Accept Invite (requires auth, but token determines Org)
+	v1.Post("/orgs/invite/accept", middleware.RequireAuth, orgHandler.AcceptInvite)
 
 	// Org Routes (Multiplayer)
 	orgs := v1.Group("/orgs/:org_id")
