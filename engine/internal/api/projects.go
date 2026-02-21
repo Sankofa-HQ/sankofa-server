@@ -374,7 +374,7 @@ func (h *ProjectHandler) ResetProjectKey(c *fiber.Ctx) error {
 
 	// 2. Fetch Project
 	var project database.Project
-	if err := h.DB.First(&project, projectID).Error; err != nil {
+	if err := h.DB.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
 
