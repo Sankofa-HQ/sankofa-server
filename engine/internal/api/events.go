@@ -296,174 +296,193 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 			// Property Filters
 			for _, f := range q.Filters {
 				if f.Property != "" && f.Value != "" {
-					key := f.Property
-					var col string
-
-					// Determine column and path
-					if strings.HasPrefix(key, "prop_") {
-						col = fmt.Sprintf("properties['%s']", key[5:])
-					} else if key == "event_name" || key == "distinct_id" || key == "lib_version" || key == "timestamp" {
-						col = key
-					} else {
-						col = fmt.Sprintf("default_properties['%s']", key)
+					keys := []string{f.Property}
+					if f.Property != "event_name" && f.Property != "distinct_id" && f.Property != "lib_version" && f.Property != "timestamp" {
+						keys = h.expandVirtualPropertyNames(projID, f.Property)
 					}
 
-					// Handle Object Subkey
-					if f.Type == "object" && f.Subkey != "" {
-						col = fmt.Sprintf("JSONExtractString(%s, '%s')", col, f.Subkey)
-					}
+					var propClauses []string
+					var propArgs []interface{}
 
-					// Cast value
-					castWrapper := func(c string, t string) string {
-						switch t {
-						case "number":
-							return fmt.Sprintf("toFloat64OrZero(%s)", c)
-						case "boolean":
-							return fmt.Sprintf("(%s = 'true')", c)
-						case "date":
-							return fmt.Sprintf("parseDateTimeBestEffort(%s)", c)
-						default:
-							return c
-						}
-					}
-					targetCol := castWrapper(col, f.Type)
+					for _, key := range keys {
+						var col string
 
-					// Aggregation for lists
-					if f.Type == "list" && f.Aggregation != "" {
-						switch f.Aggregation {
-						case "sum":
-							targetCol = fmt.Sprintf("arraySum(JSONExtract(%s, 'Array(Float64)'))", col)
-						case "avg":
-							targetCol = fmt.Sprintf("arrayAvg(JSONExtract(%s, 'Array(Float64)'))", col)
-						case "min":
-							targetCol = fmt.Sprintf("arrayMin(JSONExtract(%s, 'Array(Float64)'))", col)
-						case "max":
-							targetCol = fmt.Sprintf("arrayMax(JSONExtract(%s, 'Array(Float64)'))", col)
-						case "count":
-							targetCol = fmt.Sprintf("length(JSONExtractArrayRaw(%s))", col)
-						case "distinct_count":
-							targetCol = fmt.Sprintf("length(arrayDistinct(JSONExtractArrayRaw(%s)))", col)
-						}
-					}
-
-					// Generate SQL based on Operator
-					switch f.Operator {
-					case ">":
-						andClauses = append(andClauses, fmt.Sprintf("%s > ?", targetCol))
-						queryArgs = append(queryArgs, f.Value)
-					case "<":
-						andClauses = append(andClauses, fmt.Sprintf("%s < ?", targetCol))
-						queryArgs = append(queryArgs, f.Value)
-					case ">=":
-						andClauses = append(andClauses, fmt.Sprintf("%s >= ?", targetCol))
-						queryArgs = append(queryArgs, f.Value)
-					case "<=":
-						andClauses = append(andClauses, fmt.Sprintf("%s <= ?", targetCol))
-						queryArgs = append(queryArgs, f.Value)
-					case "is", "=":
-						if col == "event_name" {
-							expanded := h.expandVirtualEventNames(projID, []string{f.Value})
-							if len(expanded) == 1 {
-								andClauses = append(andClauses, fmt.Sprintf("%s = ?", targetCol))
-								queryArgs = append(queryArgs, expanded[0])
-							} else {
-								placeholders := make([]string, len(expanded))
-								for i, ex := range expanded {
-									placeholders[i] = "?"
-									queryArgs = append(queryArgs, ex)
-								}
-								andClauses = append(andClauses, fmt.Sprintf("%s IN (%s)", targetCol, strings.Join(placeholders, ",")))
-							}
-						} else {
-							andClauses = append(andClauses, fmt.Sprintf("%s = ?", targetCol))
-							queryArgs = append(queryArgs, f.Value)
-						}
-					case "is_not", "!=":
-						if col == "event_name" {
-							expanded := h.expandVirtualEventNames(projID, []string{f.Value})
-							if len(expanded) == 1 {
-								andClauses = append(andClauses, fmt.Sprintf("%s != ?", targetCol))
-								queryArgs = append(queryArgs, expanded[0])
-							} else {
-								placeholders := make([]string, len(expanded))
-								for i, ex := range expanded {
-									placeholders[i] = "?"
-									queryArgs = append(queryArgs, ex)
-								}
-								andClauses = append(andClauses, fmt.Sprintf("%s NOT IN (%s)", targetCol, strings.Join(placeholders, ",")))
-							}
-						} else {
-							andClauses = append(andClauses, fmt.Sprintf("%s != ?", targetCol))
-							queryArgs = append(queryArgs, f.Value)
-						}
-					case "contains":
-						andClauses = append(andClauses, fmt.Sprintf("%s ILIKE ?", targetCol))
-						queryArgs = append(queryArgs, "%"+f.Value+"%")
-					case "does_not_contain":
-						andClauses = append(andClauses, fmt.Sprintf("%s NOT ILIKE ?", targetCol))
-						queryArgs = append(queryArgs, "%"+f.Value+"%")
-					case "is_set":
-						if strings.HasPrefix(key, "prop_") || (!strings.HasPrefix(key, "event_") && !strings.HasPrefix(key, "distinct_") && !strings.HasPrefix(key, "lib_") && !strings.HasPrefix(key, "time")) {
-							if f.Type == "object" && f.Subkey != "" {
-								andClauses = append(andClauses, fmt.Sprintf("JSONHas(%s, '%s') = 1", strings.TrimSuffix(strings.TrimPrefix(col, "JSONExtractString("), ", '"+f.Subkey+"')"), f.Subkey))
-							} else {
-								if strings.HasPrefix(key, "prop_") {
-									andClauses = append(andClauses, fmt.Sprintf("mapContains(properties, '%s')", key[5:]))
-								} else {
-									andClauses = append(andClauses, fmt.Sprintf("mapContains(default_properties, '%s')", key))
-								}
-							}
-						} else {
-							andClauses = append(andClauses, fmt.Sprintf("%s IS NOT NULL", col))
-						}
-					case "is_not_set":
+						// Determine column and path
 						if strings.HasPrefix(key, "prop_") {
-							andClauses = append(andClauses, fmt.Sprintf("NOT mapContains(properties, '%s')", key[5:]))
+							col = fmt.Sprintf("properties['%s']", key[5:])
+						} else if key == "event_name" || key == "distinct_id" || key == "lib_version" || key == "timestamp" {
+							col = key
 						} else {
-							andClauses = append(andClauses, fmt.Sprintf("NOT mapContains(default_properties, '%s')", key))
+							col = fmt.Sprintf("default_properties['%s']", key)
 						}
-					case "any_in_list":
-						var vals []string
-						if err := json.Unmarshal([]byte(f.Value), &vals); err == nil && len(vals) > 0 {
-							if col == "event_name" {
-								vals = h.expandVirtualEventNames(projID, vals)
+
+						// Handle Object Subkey
+						if f.Type == "object" && f.Subkey != "" {
+							col = fmt.Sprintf("JSONExtractString(%s, '%s')", col, f.Subkey)
+						}
+
+						// Cast value
+						castWrapper := func(c string, t string) string {
+							switch t {
+							case "number":
+								return fmt.Sprintf("toFloat64OrZero(%s)", c)
+							case "boolean":
+								return fmt.Sprintf("(%s = 'true')", c)
+							case "date":
+								return fmt.Sprintf("parseDateTimeBestEffort(%s)", c)
+							default:
+								return c
 							}
-							placeholders := strings.Repeat("?,", len(vals)-1) + "?"
-							andClauses = append(andClauses, fmt.Sprintf("%s IN (%s)", targetCol, placeholders))
-							for _, v := range vals {
-								queryArgs = append(queryArgs, v)
+						}
+						targetCol := castWrapper(col, f.Type)
+
+						// Aggregation for lists
+						if f.Type == "list" && f.Aggregation != "" {
+							switch f.Aggregation {
+							case "sum":
+								targetCol = fmt.Sprintf("arraySum(JSONExtract(%s, 'Array(Float64)'))", col)
+							case "avg":
+								targetCol = fmt.Sprintf("arrayAvg(JSONExtract(%s, 'Array(Float64)'))", col)
+							case "min":
+								targetCol = fmt.Sprintf("arrayMin(JSONExtract(%s, 'Array(Float64)'))", col)
+							case "max":
+								targetCol = fmt.Sprintf("arrayMax(JSONExtract(%s, 'Array(Float64)'))", col)
+							case "count":
+								targetCol = fmt.Sprintf("length(JSONExtractArrayRaw(%s))", col)
+							case "distinct_count":
+								targetCol = fmt.Sprintf("length(arrayDistinct(JSONExtractArrayRaw(%s)))", col)
+							}
+						}
+
+						// Generate SQL based on Operator
+						switch f.Operator {
+						case ">":
+							propClauses = append(propClauses, fmt.Sprintf("%s > ?", targetCol))
+							propArgs = append(propArgs, f.Value)
+						case "<":
+							propClauses = append(propClauses, fmt.Sprintf("%s < ?", targetCol))
+							propArgs = append(propArgs, f.Value)
+						case ">=":
+							propClauses = append(propClauses, fmt.Sprintf("%s >= ?", targetCol))
+							propArgs = append(propArgs, f.Value)
+						case "<=":
+							propClauses = append(propClauses, fmt.Sprintf("%s <= ?", targetCol))
+							propArgs = append(propArgs, f.Value)
+						case "is", "=":
+							if col == "event_name" {
+								expanded := h.expandVirtualEventNames(projID, []string{f.Value})
+								if len(expanded) == 1 {
+									propClauses = append(propClauses, fmt.Sprintf("%s = ?", targetCol))
+									propArgs = append(propArgs, expanded[0])
+								} else {
+									placeholders := make([]string, len(expanded))
+									for i, ex := range expanded {
+										placeholders[i] = "?"
+										propArgs = append(propArgs, ex)
+									}
+									propClauses = append(propClauses, fmt.Sprintf("%s IN (%s)", targetCol, strings.Join(placeholders, ",")))
+								}
+							} else {
+								propClauses = append(propClauses, fmt.Sprintf("%s = ?", targetCol))
+								propArgs = append(propArgs, f.Value)
+							}
+						case "is_not", "!=":
+							if col == "event_name" {
+								expanded := h.expandVirtualEventNames(projID, []string{f.Value})
+								if len(expanded) == 1 {
+									propClauses = append(propClauses, fmt.Sprintf("%s != ?", targetCol))
+									propArgs = append(propArgs, expanded[0])
+								} else {
+									placeholders := make([]string, len(expanded))
+									for i, ex := range expanded {
+										placeholders[i] = "?"
+										propArgs = append(propArgs, ex)
+									}
+									propClauses = append(propClauses, fmt.Sprintf("%s NOT IN (%s)", targetCol, strings.Join(placeholders, ",")))
+								}
+							} else {
+								propClauses = append(propClauses, fmt.Sprintf("%s != ?", targetCol))
+								propArgs = append(propArgs, f.Value)
+							}
+						case "contains":
+							propClauses = append(propClauses, fmt.Sprintf("%s ILIKE ?", targetCol))
+							propArgs = append(propArgs, "%"+f.Value+"%")
+						case "does_not_contain":
+							propClauses = append(propClauses, fmt.Sprintf("%s NOT ILIKE ?", targetCol))
+							propArgs = append(propArgs, "%"+f.Value+"%")
+						case "is_set":
+							if strings.HasPrefix(key, "prop_") || (!strings.HasPrefix(key, "event_") && !strings.HasPrefix(key, "distinct_") && !strings.HasPrefix(key, "lib_") && !strings.HasPrefix(key, "time")) {
+								if f.Type == "object" && f.Subkey != "" {
+									propClauses = append(propClauses, fmt.Sprintf("JSONHas(%s, '%s') = 1", strings.TrimSuffix(strings.TrimPrefix(col, "JSONExtractString("), ", '"+f.Subkey+"')"), f.Subkey))
+								} else {
+									if strings.HasPrefix(key, "prop_") {
+										propClauses = append(propClauses, fmt.Sprintf("mapContains(properties, '%s')", key[5:]))
+									} else {
+										propClauses = append(propClauses, fmt.Sprintf("mapContains(default_properties, '%s')", key))
+									}
+								}
+							} else {
+								propClauses = append(propClauses, fmt.Sprintf("%s IS NOT NULL", col))
+							}
+						case "is_not_set":
+							if strings.HasPrefix(key, "prop_") {
+								propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(properties, '%s')", key[5:]))
+							} else {
+								propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(default_properties, '%s')", key))
+							}
+						case "any_in_list":
+							var vals []string
+							if err := json.Unmarshal([]byte(f.Value), &vals); err == nil && len(vals) > 0 {
+								if col == "event_name" {
+									vals = h.expandVirtualEventNames(projID, vals)
+								}
+								placeholders := strings.Repeat("?,", len(vals)-1) + "?"
+								propClauses = append(propClauses, fmt.Sprintf("%s IN (%s)", targetCol, placeholders))
+								for _, v := range vals {
+									propArgs = append(propArgs, v)
+								}
+							}
+						}
+
+						// Special Cohort Handling (Type == "cohort")
+						if f.Type == "cohort" {
+							cohortIDStr := f.Value
+							var cohort database.Cohort
+							if err := h.DB.First(&cohort, "id = ?", cohortIDStr).Error; err == nil {
+								var cohortSQL string
+								var cohortArgs []interface{}
+
+								if cohort.Type == "static" {
+									cohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
+									cohortID, _ := strconv.Atoi(cohortIDStr)
+									cohortArgs = []interface{}{projID, cohortID}
+								} else {
+									var ast CohortAST
+									if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
+										cohortSQL, cohortArgs = BuildCohortSQL(h.DB, projID, environment, ast)
+									}
+								}
+
+								if cohortSQL != "" {
+									if f.Operator == "is_not" || f.Operator == "!=" {
+										propClauses = append(propClauses, fmt.Sprintf("distinct_id NOT IN (%s)", cohortSQL))
+									} else {
+										propClauses = append(propClauses, fmt.Sprintf("distinct_id IN (%s)", cohortSQL))
+									}
+									propArgs = append(propArgs, cohortArgs...)
+								}
 							}
 						}
 					}
 
-					// Special Cohort Handling (Type == "cohort")
-					if f.Type == "cohort" {
-						cohortIDStr := f.Value
-						var cohort database.Cohort
-						if err := h.DB.First(&cohort, "id = ?", cohortIDStr).Error; err == nil {
-							var cohortSQL string
-							var cohortArgs []interface{}
-
-							if cohort.Type == "static" {
-								cohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
-								cohortID, _ := strconv.Atoi(cohortIDStr)
-								cohortArgs = []interface{}{projID, cohortID}
-							} else {
-								var ast CohortAST
-								if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
-									cohortSQL, cohortArgs = BuildCohortSQL(h.DB, projID, environment, ast)
-								}
-							}
-
-							if cohortSQL != "" {
-								if f.Operator == "is_not" || f.Operator == "!=" {
-									andClauses = append(andClauses, fmt.Sprintf("distinct_id NOT IN (%s)", cohortSQL))
-								} else {
-									andClauses = append(andClauses, fmt.Sprintf("distinct_id IN (%s)", cohortSQL))
-								}
-								queryArgs = append(queryArgs, cohortArgs...)
-							}
+					if len(propClauses) > 0 {
+						isNegative := f.Operator == "is_not" || f.Operator == "!=" || f.Operator == "does_not_contain" || f.Operator == "is_not_set"
+						joinOp := " OR "
+						if isNegative {
+							joinOp = " AND "
 						}
+						andClauses = append(andClauses, "("+strings.Join(propClauses, joinOp)+")")
+						queryArgs = append(queryArgs, propArgs...)
 					}
 				}
 			}
@@ -819,35 +838,47 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"values": []string{}})
 	}
 
-	// Determine column based on property name
-	col := ""
-	if strings.HasPrefix(property, "prop_") {
-		col = fmt.Sprintf("properties['%s']", property[5:])
-	} else if property == "event_name" || property == "distinct_id" || property == "lib_version" || property == "timestamp" {
-		col = property
-	} else {
-		col = fmt.Sprintf("default_properties['%s']", property)
+	keys := []string{property}
+	if property != "event_name" && property != "distinct_id" && property != "lib_version" && property != "timestamp" {
+		keys = h.expandVirtualPropertyNames(project.ID, property)
 	}
 
-	// Build Query
-	query := fmt.Sprintf(`
-		SELECT DISTINCT %s as val
-		FROM events
-		WHERE tenant_id = ? AND environment = ?
-	`, col)
-	args := []interface{}{project.ID, environment}
+	var unionQueries []string
+	var args []interface{}
 
-	if eventName != "" {
-		query += " AND event_name = ?"
-		args = append(args, eventName)
+	for _, key := range keys {
+		// Determine column based on property name
+		col := ""
+		if strings.HasPrefix(key, "prop_") {
+			col = fmt.Sprintf("properties['%s']", key[5:])
+		} else if key == "event_name" || key == "distinct_id" || key == "lib_version" || key == "timestamp" {
+			col = key
+		} else {
+			col = fmt.Sprintf("default_properties['%s']", key)
+		}
+
+		// Build Query
+		subQuery := fmt.Sprintf(`
+			SELECT DISTINCT %s as val
+			FROM events
+			WHERE tenant_id = ? AND environment = ?
+		`, col)
+		args = append(args, project.ID, environment)
+
+		if eventName != "" {
+			subQuery += " AND event_name = ?"
+			args = append(args, eventName)
+		}
+
+		if search != "" {
+			subQuery += fmt.Sprintf(" AND %s LIKE ?", col)
+			args = append(args, "%%"+search+"%%")
+		}
+
+		unionQueries = append(unionQueries, subQuery)
 	}
 
-	if search != "" {
-		query += fmt.Sprintf(" AND %s LIKE ?", col)
-		args = append(args, "%%"+search+"%%")
-	}
-
-	query += " ORDER BY val LIMIT 100"
+	query := "SELECT DISTINCT val FROM (" + strings.Join(unionQueries, " UNION ALL ") + ") ORDER BY val LIMIT 100"
 
 	rows, err := h.CH.Query(context.Background(), query, args...)
 	if err != nil {
@@ -944,4 +975,59 @@ func (h *EventsHandler) getVirtualEventMapping(projectID string) map[string]stri
 	}
 
 	return mapping
+}
+
+// expandVirtualPropertyNames checks if the given property name (which may be prefixed with "prop_")
+// is a virtual property in Lexicon, and if so, returns all its underlying child property names (with proper prefix).
+func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName string) []string {
+	if propName == "" {
+		return []string{}
+	}
+
+	isEventProp := strings.HasPrefix(propName, "prop_")
+	rawName := propName
+	if isEventProp {
+		rawName = propName[len("prop_"):]
+	}
+
+	var virtualID string
+	var found bool
+
+	if isEventProp {
+		var vp database.LexiconEventProperty
+		if err := h.DB.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawName).First(&vp).Error; err == nil {
+			virtualID = vp.ID
+			found = true
+		}
+	} else {
+		var vp database.LexiconProfileProperty
+		if err := h.DB.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawName).First(&vp).Error; err == nil {
+			virtualID = vp.ID
+			found = true
+		}
+	}
+
+	if !found {
+		return []string{propName}
+	}
+
+	var expanded []string
+	if isEventProp {
+		var children []database.LexiconEventProperty
+		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
+		for _, child := range children {
+			expanded = append(expanded, "prop_"+child.Name)
+		}
+	} else {
+		var children []database.LexiconProfileProperty
+		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
+		for _, child := range children {
+			expanded = append(expanded, child.Name)
+		}
+	}
+
+	if len(expanded) == 0 {
+		return []string{propName}
+	}
+	return expanded
 }

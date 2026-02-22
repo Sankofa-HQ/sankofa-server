@@ -37,10 +37,14 @@ func (h *LexiconHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	// Event Properties
 	lexicon.Get("/event-properties", h.ListEventProperties)
 	lexicon.Put("/event-properties/:id", h.UpdateEventProperty)
+	lexicon.Delete("/event-properties/:id", h.DeleteEventProperty)
+	lexicon.Post("/event-properties/merge", h.MergeEventProperties)
 
 	// Profile Properties
 	lexicon.Get("/profile-properties", h.ListProfileProperties)
 	lexicon.Put("/profile-properties/:id", h.UpdateProfileProperty)
+	lexicon.Delete("/profile-properties/:id", h.DeleteProfileProperty)
+	lexicon.Post("/profile-properties/merge", h.MergeProfileProperties)
 }
 
 // --- EVENTS ---
@@ -417,6 +421,101 @@ func (h *LexiconHandler) UpdateEventProperty(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
+// MergeEventProperties handles creating a virtual event property and associating multiple existing properties
+func (h *LexiconHandler) MergeEventProperties(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	var req struct {
+		NewDisplayName string   `json:"new_display_name"`
+		PropertyIDs    []string `json:"property_ids"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	if req.NewDisplayName == "" || len(req.PropertyIDs) < 2 {
+		return c.Status(400).JSON(fiber.Map{"error": "A new display name and at least two properties are required"})
+	}
+
+	return h.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Create the new virtual property
+		virtualProp := database.LexiconEventProperty{
+			ProjectID:   project.ID,
+			Name:        fmt.Sprintf("merged_prop_%d", time.Now().UnixNano()),
+			DisplayName: req.NewDisplayName,
+			IsVirtual:   true,
+			Type:        "string", // Defaulting to string for virtual properties
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+
+		if err := tx.Create(&virtualProp).Error; err != nil {
+			return err
+		}
+
+		// 2. Fetch target properties
+		var targetProps []database.LexiconEventProperty
+		if err := tx.Where("project_id = ? AND id IN ?", project.ID, req.PropertyIDs).Find(&targetProps).Error; err != nil {
+			return err
+		}
+
+		if len(targetProps) != len(req.PropertyIDs) {
+			return fmt.Errorf("could not find all specified properties for merging")
+		}
+
+		// 3. Update target properties
+		if err := tx.Model(&database.LexiconEventProperty{}).
+			Where("id IN ?", req.PropertyIDs).
+			Updates(map[string]interface{}{
+				"merged_into_id": virtualProp.ID,
+				"hidden":         true,
+				"updated_at":     time.Now(),
+			}).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// DeleteEventProperty handles deleting an event property. If virtual, unmerges children.
+func (h *LexiconHandler) DeleteEventProperty(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	id := c.Params("id")
+
+	return h.DB.Transaction(func(tx *gorm.DB) error {
+		var prop database.LexiconEventProperty
+		if err := tx.Where("project_id = ? AND id = ?", project.ID, id).First(&prop).Error; err != nil {
+			return err
+		}
+
+		if prop.IsVirtual {
+			if err := tx.Model(&database.LexiconEventProperty{}).
+				Where("project_id = ? AND merged_into_id = ?", project.ID, prop.ID).
+				Updates(map[string]interface{}{
+					"merged_into_id": gorm.Expr("NULL"),
+					"hidden":         false,
+					"updated_at":     time.Now(),
+				}).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Delete(&prop).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
 // --- PROFILE PROPERTIES ---
 
 func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
@@ -537,6 +636,108 @@ func (h *LexiconHandler) UpdateProfileProperty(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
 	}
 	return c.JSON(fiber.Map{"success": true})
+}
+
+// MergeProfileProperties handles creating a virtual profile property and associating multiple existing properties
+func (h *LexiconHandler) MergeProfileProperties(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	var req struct {
+		NewDisplayName string   `json:"new_display_name"`
+		PropertyIDs    []string `json:"property_ids"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	if req.NewDisplayName == "" || len(req.PropertyIDs) < 2 {
+		return c.Status(400).JSON(fiber.Map{"error": "A new display name and at least two properties are required"})
+	}
+
+	return h.DB.Transaction(func(tx *gorm.DB) error {
+		// Determine EntityType from one of the targets
+		var firstTarget database.LexiconProfileProperty
+		if err := tx.Where("project_id = ? AND id = ?", project.ID, req.PropertyIDs[0]).First(&firstTarget).Error; err != nil {
+			return err
+		}
+
+		// 1. Create the new virtual property
+		virtualProp := database.LexiconProfileProperty{
+			ProjectID:   project.ID,
+			EntityType:  firstTarget.EntityType,
+			Name:        fmt.Sprintf("merged_prof_prop_%d", time.Now().UnixNano()),
+			DisplayName: req.NewDisplayName,
+			IsVirtual:   true,
+			Type:        "string", // Defaulting to string
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+
+		if err := tx.Create(&virtualProp).Error; err != nil {
+			return err
+		}
+
+		// 2. Fetch target properties ensuring they match EntityType
+		var targetProps []database.LexiconProfileProperty
+		if err := tx.Where("project_id = ? AND entity_type = ? AND id IN ?", project.ID, firstTarget.EntityType, req.PropertyIDs).Find(&targetProps).Error; err != nil {
+			return err
+		}
+
+		if len(targetProps) != len(req.PropertyIDs) {
+			return fmt.Errorf("could not find all specified properties for merging or mixed entity types")
+		}
+
+		// 3. Update target properties
+		if err := tx.Model(&database.LexiconProfileProperty{}).
+			Where("id IN ?", req.PropertyIDs).
+			Updates(map[string]interface{}{
+				"merged_into_id": virtualProp.ID,
+				"hidden":         true,
+				"updated_at":     time.Now(),
+			}).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// DeleteProfileProperty handles deleting a profile property. If virtual, unmerges children.
+func (h *LexiconHandler) DeleteProfileProperty(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	id := c.Params("id")
+
+	return h.DB.Transaction(func(tx *gorm.DB) error {
+		var prop database.LexiconProfileProperty
+		if err := tx.Where("project_id = ? AND id = ?", project.ID, id).First(&prop).Error; err != nil {
+			return err
+		}
+
+		if prop.IsVirtual {
+			if err := tx.Model(&database.LexiconProfileProperty{}).
+				Where("project_id = ? AND merged_into_id = ?", project.ID, prop.ID).
+				Updates(map[string]interface{}{
+					"merged_into_id": gorm.Expr("NULL"),
+					"hidden":         false,
+					"updated_at":     time.Now(),
+				}).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Delete(&prop).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 // --- HELPERS ---

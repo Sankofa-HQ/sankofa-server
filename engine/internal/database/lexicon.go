@@ -45,6 +45,8 @@ type LexiconEventProperty struct {
 	ExampleValue string      `json:"example_value"` // Sample value for documentation
 	Hidden       bool        `gorm:"default:false" json:"hidden"`
 	Dropped      bool        `gorm:"default:false" json:"dropped"`
+	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"` // True if this is a merged/virtual property
+	MergedIntoID *string     `gorm:"type:varchar(32)" json:"merged_into_id"`
 	Tags         StringArray `gorm:"type:text" json:"tags"`
 	Type         string      `json:"type"` // string, number, boolean, date, object, list
 	CreatedAt    time.Time   `json:"created_at"`
@@ -73,6 +75,8 @@ type LexiconProfileProperty struct {
 	ExampleValue string      `json:"example_value"`
 	Hidden       bool        `gorm:"default:false" json:"hidden"`
 	Dropped      bool        `gorm:"default:false" json:"dropped"`
+	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"` // True if this is a merged/virtual property
+	MergedIntoID *string     `gorm:"type:varchar(32)" json:"merged_into_id"`
 	Tags         StringArray `gorm:"type:text" json:"tags"`
 	Type         string      `json:"type"`
 	CreatedAt    time.Time   `json:"created_at"`
