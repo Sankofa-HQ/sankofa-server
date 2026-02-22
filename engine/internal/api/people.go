@@ -736,7 +736,63 @@ func (h *PeopleHandler) GetPropertyKeys(c *fiber.Ctx) error {
 		keys = []string{}
 	}
 
+	keys = applyLexiconToProfileProperties(h.DB, project.ID, keys)
+
 	return c.JSON(fiber.Map{"keys": keys})
+}
+
+// applyLexiconToProfileProperties takes a list of raw profile property keys from ClickHouse,
+// maps them against the LexiconProfileProperty table in SQLite, hides any properties that are merged
+// into a virtual property, and adds the virtual properties themselves if they aren't already included.
+func applyLexiconToProfileProperties(db *gorm.DB, projectID string, rawKeys []string) []string {
+	if len(rawKeys) == 0 {
+		return rawKeys
+	}
+
+	rawSet := make(map[string]bool)
+	for _, k := range rawKeys {
+		rawSet[k] = true
+	}
+
+	var allLexiconProps []database.LexiconProfileProperty
+	if err := db.Where("project_id = ?", projectID).Find(&allLexiconProps).Error; err != nil {
+		return rawKeys
+	}
+
+	hiddenMap := make(map[string]bool)
+	virtualMap := make(map[string]bool)
+	mergedTargetsMap := make(map[string]bool)
+
+	for _, p := range allLexiconProps {
+		if p.Hidden {
+			hiddenMap[p.Name] = true
+		}
+		if p.IsVirtual {
+			virtualMap[p.Name] = true
+		}
+		if p.MergedIntoID != nil && *p.MergedIntoID != "" {
+			if rawSet[p.Name] {
+				mergedTargetsMap[*p.MergedIntoID] = true
+			}
+		}
+	}
+
+	if len(mergedTargetsMap) > 0 {
+		for _, p := range allLexiconProps {
+			if mergedTargetsMap[p.ID] {
+				rawSet[p.Name] = true
+			}
+		}
+	}
+
+	var finalKeys []string
+	for k := range rawSet {
+		if !hiddenMap[k] {
+			finalKeys = append(finalKeys, k)
+		}
+	}
+
+	return finalKeys
 }
 
 // GetPropertyValues - GET /api/v1/people/properties/values

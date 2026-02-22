@@ -161,6 +161,13 @@ func (h *LexiconHandler) UpdateEvent(c *fiber.Ctx) error {
 		serialised, _ := tagsVal.Value()
 		updates["tags"] = serialised
 	}
+	if v, ok := body["merged_into_id"]; ok {
+		if v == nil || v == "" {
+			updates["merged_into_id"] = gorm.Expr("NULL")
+		} else {
+			updates["merged_into_id"] = v
+		}
+	}
 
 	result := h.DB.Model(&database.LexiconEvent{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
@@ -412,6 +419,13 @@ func (h *LexiconHandler) UpdateEventProperty(c *fiber.Ctx) error {
 		serialised, _ := tagsVal.Value()
 		updates["tags"] = serialised
 	}
+	if v, ok := body["merged_into_id"]; ok {
+		if v == nil || v == "" {
+			updates["merged_into_id"] = gorm.Expr("NULL")
+		} else {
+			updates["merged_into_id"] = v
+		}
+	}
 
 	result := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
@@ -628,6 +642,13 @@ func (h *LexiconHandler) UpdateProfileProperty(c *fiber.Ctx) error {
 		tagsVal, _ := toStringArray(v)
 		serialised, _ := tagsVal.Value()
 		updates["tags"] = serialised
+	}
+	if v, ok := body["merged_into_id"]; ok {
+		if v == nil || v == "" {
+			updates["merged_into_id"] = gorm.Expr("NULL")
+		} else {
+			updates["merged_into_id"] = v
+		}
 	}
 
 	result := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ?", id).Updates(updates)
