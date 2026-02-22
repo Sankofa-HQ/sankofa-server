@@ -9,16 +9,18 @@ import (
 
 // LexiconEvent represents a tracked event in the system.
 type LexiconEvent struct {
-	ID          string      `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	ProjectID   string      `gorm:"not null;index;uniqueIndex:idx_project_event_name;type:varchar(32)" json:"project_id"`
-	Name        string      `gorm:"not null;index;uniqueIndex:idx_project_event_name" json:"name"` // The raw event name (e.g., "signup_completed")
-	DisplayName string      `json:"display_name"`                                                  // Friendly name (e.g., "Sign Up Completed")
-	Description string      `json:"description"`
-	Hidden      bool        `gorm:"default:false" json:"hidden"`  // Hides from UI filters
-	Dropped     bool        `gorm:"default:false" json:"dropped"` // Instructs ingestion to drop this event
-	Tags        StringArray `gorm:"type:text" json:"tags"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	ID           string      `gorm:"primaryKey;type:varchar(32)" json:"id"`
+	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_event_name;type:varchar(32)" json:"project_id"`
+	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_event_name" json:"name"` // The raw event name (e.g., "signup_completed")
+	DisplayName  string      `json:"display_name"`                                                  // Friendly name (e.g., "Sign Up Completed")
+	Description  string      `json:"description"`
+	Hidden       bool        `gorm:"default:false" json:"hidden"`     // Hides from UI filters
+	Dropped      bool        `gorm:"default:false" json:"dropped"`    // Instructs ingestion to drop this event
+	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"` // True if this is a merged/virtual event
+	MergedIntoID *string     `gorm:"type:varchar(32)" json:"merged_into_id"`
+	Tags         StringArray `gorm:"type:text" json:"tags"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
 func (e *LexiconEvent) BeforeCreate(tx *gorm.DB) (err error) {

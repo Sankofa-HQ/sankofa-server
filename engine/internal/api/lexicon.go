@@ -31,6 +31,7 @@ func (h *LexiconHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	// Events
 	lexicon.Get("/events", h.ListEvents)
 	lexicon.Put("/events/:id", h.UpdateEvent)
+	lexicon.Post("/events/merge", h.MergeEvents)
 
 	// Event Properties
 	lexicon.Get("/event-properties", h.ListEventProperties)
@@ -163,6 +164,66 @@ func (h *LexiconHandler) UpdateEvent(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"success": true})
+}
+
+// MergeEvents handles creating a virtual event and associating multiple existing events to it
+func (h *LexiconHandler) MergeEvents(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	var req struct {
+		NewDisplayName string   `json:"new_display_name"`
+		EventIDs       []string `json:"event_ids"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	if req.NewDisplayName == "" || len(req.EventIDs) < 2 {
+		return c.Status(400).JSON(fiber.Map{"error": "A new display name and at least two events are required"})
+	}
+
+	return h.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Create the new virtual event
+		virtualEvent := database.LexiconEvent{
+			ProjectID:   project.ID,
+			Name:        fmt.Sprintf("merged_%d", time.Now().UnixNano()), // Unique internal name
+			DisplayName: req.NewDisplayName,
+			IsVirtual:   true,
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+
+		if err := tx.Create(&virtualEvent).Error; err != nil {
+			return err
+		}
+
+		// 2. Fetch the target events to verify they exist and belong to the project
+		var targetEvents []database.LexiconEvent
+		if err := tx.Where("project_id = ? AND id IN ?", project.ID, req.EventIDs).Find(&targetEvents).Error; err != nil {
+			return err
+		}
+
+		if len(targetEvents) != len(req.EventIDs) {
+			return fmt.Errorf("could not find all specified events for merging")
+		}
+
+		// 3. Update the target events
+		if err := tx.Model(&database.LexiconEvent{}).
+			Where("id IN ?", req.EventIDs).
+			Updates(map[string]interface{}{
+				"merged_into_id": virtualEvent.ID,
+				"hidden":         true, // Hide merged children from UI
+				"updated_at":     time.Now(),
+			}).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 // --- EVENT PROPERTIES ---
