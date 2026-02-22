@@ -112,6 +112,18 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 		return dbEvents[i].Name < dbEvents[j].Name
 	})
 
+	// Filter hidden items unless explicitly requested
+	includeHidden := c.Query("include_hidden", "false") == "true"
+	if !includeHidden {
+		var visible []database.LexiconEvent
+		for _, e := range dbEvents {
+			if !e.Hidden {
+				visible = append(visible, e)
+			}
+		}
+		dbEvents = visible
+	}
+
 	return c.JSON(dbEvents)
 }
 
@@ -250,6 +262,18 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 		}
 	}
 
+	// Filter hidden items unless explicitly requested
+	includeHidden := c.Query("include_hidden", "false") == "true"
+	if !includeHidden {
+		var visible []database.LexiconEventProperty
+		for _, p := range props {
+			if !p.Hidden {
+				visible = append(visible, p)
+			}
+		}
+		props = visible
+	}
+
 	return c.JSON(props)
 }
 
@@ -358,6 +382,18 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 		} else {
 			log.Println("⚠️ ClickHouse Profile Property Sync Error:", err)
 		}
+	}
+
+	// Filter hidden items unless explicitly requested
+	includeHidden := c.Query("include_hidden", "false") == "true"
+	if !includeHidden {
+		var visible []database.LexiconProfileProperty
+		for _, p := range props {
+			if !p.Hidden {
+				visible = append(visible, p)
+			}
+		}
+		props = visible
 	}
 
 	return c.JSON(props)
