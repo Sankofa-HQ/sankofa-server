@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"sankofa/engine/internal/database"
@@ -256,8 +257,15 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 					// 2. Build Subquery for Events
 					// SELECT distinct_id FROM events WHERE ... GROUP BY distinct_id HAVING ...
 
-					subQuery := `SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name = ?`
-					subArgs := []interface{}{projID, environment, f.EventName}
+					expandedNames := ExpandVirtualEventNames(h.DB, projID, []string{f.EventName})
+					placeholders := make([]string, len(expandedNames))
+					subArgs := []interface{}{projID, environment}
+					for i, name := range expandedNames {
+						placeholders[i] = "?"
+						subArgs = append(subArgs, name)
+					}
+
+					subQuery := fmt.Sprintf(`SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name IN (%s)`, strings.Join(placeholders, ","))
 
 					if timeSql != "" {
 						subQuery += " AND " + timeSql

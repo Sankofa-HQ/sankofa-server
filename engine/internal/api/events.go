@@ -268,7 +268,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 			// Event Name filter
 			if q.EventName != "" {
-				expanded := h.expandVirtualEventNames(projID, []string{q.EventName})
+				expanded := ExpandVirtualEventNames(h.DB, projID, []string{q.EventName})
 				if len(expanded) == 1 {
 					andClauses = append(andClauses, "event_name = ?")
 					queryArgs = append(queryArgs, expanded[0])
@@ -375,7 +375,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							propArgs = append(propArgs, f.Value)
 						case "is", "=":
 							if col == "event_name" {
-								expanded := h.expandVirtualEventNames(projID, []string{f.Value})
+								expanded := ExpandVirtualEventNames(h.DB, projID, []string{f.Value})
 								if len(expanded) == 1 {
 									propClauses = append(propClauses, fmt.Sprintf("%s = ?", targetCol))
 									propArgs = append(propArgs, expanded[0])
@@ -393,7 +393,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							}
 						case "is_not", "!=":
 							if col == "event_name" {
-								expanded := h.expandVirtualEventNames(projID, []string{f.Value})
+								expanded := ExpandVirtualEventNames(h.DB, projID, []string{f.Value})
 								if len(expanded) == 1 {
 									propClauses = append(propClauses, fmt.Sprintf("%s != ?", targetCol))
 									propArgs = append(propArgs, expanded[0])
@@ -447,7 +447,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							var vals []string
 							if err := json.Unmarshal([]byte(f.Value), &vals); err == nil && len(vals) > 0 {
 								if col == "event_name" {
-									vals = h.expandVirtualEventNames(projID, vals)
+									vals = ExpandVirtualEventNames(h.DB, projID, vals)
 								}
 								placeholders := strings.Repeat("?,", len(vals)-1) + "?"
 								propClauses = append(propClauses, fmt.Sprintf("%s IN (%s)", targetCol, placeholders))
@@ -926,49 +926,6 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"values": values})
-}
-
-// expandVirtualEventNames takes a slice of requested event names,
-// looks them up in Lexicon, and replaces any virtual events with their child event names.
-func (h *EventsHandler) expandVirtualEventNames(projectID string, eventNames []string) []string {
-	if len(eventNames) == 0 {
-		return eventNames
-	}
-
-	// Fetch all virtual events matching these names
-	var virtualEvents []database.LexiconEvent
-	h.DB.Where("project_id = ? AND is_virtual = ? AND name IN ?", projectID, true, eventNames).Find(&virtualEvents)
-
-	if len(virtualEvents) == 0 {
-		return eventNames // No translation needed
-	}
-
-	virtualIDs := []string{}
-	virtualNameMap := make(map[string]bool)
-	for _, ve := range virtualEvents {
-		virtualIDs = append(virtualIDs, ve.ID)
-		virtualNameMap[ve.Name] = true
-	}
-
-	// Fetch children
-	var children []database.LexiconEvent
-	h.DB.Where("project_id = ? AND merged_into_id IN ?", projectID, virtualIDs).Find(&children)
-
-	expandedNames := []string{}
-
-	// Keep original names that aren't virtual
-	for _, reqName := range eventNames {
-		if !virtualNameMap[reqName] {
-			expandedNames = append(expandedNames, reqName)
-		}
-	}
-
-	// Add children names
-	for _, child := range children {
-		expandedNames = append(expandedNames, child.Name)
-	}
-
-	return expandedNames
 }
 
 // getVirtualEventMapping returns a map of child event names to their parent virtual event's name.

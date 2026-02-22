@@ -2,8 +2,11 @@ package api
 
 import (
 	"fmt"
+	"sankofa/engine/internal/database"
 	"strconv"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 // ParseTimeRangeSql parses a time range string and returns an SQL condition and its arguments.
@@ -87,4 +90,47 @@ func ParseTimeRangeSql(colName string, timeStr string) (string, []interface{}) {
 	}
 
 	return "", nil
+}
+
+// ExpandVirtualEventNames takes a slice of requested event names,
+// looks them up in Lexicon, and replaces any virtual events with their child event names.
+func ExpandVirtualEventNames(db *gorm.DB, projectID string, eventNames []string) []string {
+	if len(eventNames) == 0 {
+		return eventNames
+	}
+
+	// Fetch all virtual events matching these names
+	var virtualEvents []database.LexiconEvent
+	db.Where("project_id = ? AND is_virtual = ? AND name IN ?", projectID, true, eventNames).Find(&virtualEvents)
+
+	if len(virtualEvents) == 0 {
+		return eventNames // No translation needed
+	}
+
+	virtualIDs := []string{}
+	virtualNameMap := make(map[string]bool)
+	for _, ve := range virtualEvents {
+		virtualIDs = append(virtualIDs, ve.ID)
+		virtualNameMap[ve.Name] = true
+	}
+
+	// Fetch children
+	var children []database.LexiconEvent
+	db.Where("project_id = ? AND merged_into_id IN ?", projectID, virtualIDs).Find(&children)
+
+	expandedNames := []string{}
+
+	// Keep original names that aren't virtual
+	for _, reqName := range eventNames {
+		if !virtualNameMap[reqName] {
+			expandedNames = append(expandedNames, reqName)
+		}
+	}
+
+	// Add children names
+	for _, child := range children {
+		expandedNames = append(expandedNames, child.Name)
+	}
+
+	return expandedNames
 }

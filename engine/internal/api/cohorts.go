@@ -135,8 +135,14 @@ func buildFiltersSQL(db *gorm.DB, projectID string, env string, filters []Filter
 			args = append(args, subArgs...)
 
 		} else if f.FilterType == "event" {
-			eventSub := `SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name = ?`
-			eventArgs := []interface{}{projectID, env, f.EventName}
+			expandedNames := ExpandVirtualEventNames(db, projectID, []string{f.EventName})
+			placeholders := make([]string, len(expandedNames))
+			eventArgs := []interface{}{projectID, env}
+			for i, name := range expandedNames {
+				placeholders[i] = "?"
+				eventArgs = append(eventArgs, name)
+			}
+			eventSub := fmt.Sprintf(`SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name IN (%s)`, strings.Join(placeholders, ","))
 
 			// Time range
 			timeSql, timeArgs := ParseTimeRangeSql("timestamp", f.TimeRange)
