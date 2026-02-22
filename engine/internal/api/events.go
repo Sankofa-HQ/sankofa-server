@@ -861,8 +861,8 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 		subQuery := fmt.Sprintf(`
 			SELECT DISTINCT %s as val
 			FROM events
-			WHERE tenant_id = ? AND environment = ?
-		`, col)
+			WHERE tenant_id = ? AND environment = ? AND %s != '' AND %s IS NOT NULL
+		`, col, col, col)
 		args = append(args, project.ID, environment)
 
 		if eventName != "" {
@@ -871,8 +871,8 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 		}
 
 		if search != "" {
-			subQuery += fmt.Sprintf(" AND %s LIKE ?", col)
-			args = append(args, "%%"+search+"%%")
+			subQuery += fmt.Sprintf(" AND %s ILIKE ?", col)
+			args = append(args, "%"+search+"%")
 		}
 
 		unionQueries = append(unionQueries, subQuery)
@@ -978,7 +978,7 @@ func (h *EventsHandler) getVirtualEventMapping(projectID string) map[string]stri
 }
 
 // expandVirtualPropertyNames checks if the given property name (which may be prefixed with "prop_")
-// is a virtual property in Lexicon, and if so, returns all its underlying child property names (with proper prefix).
+// is a virtual property in Lexicon, and if so, returns all its underlying child property names.
 func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName string) []string {
 	if propName == "" {
 		return []string{}
@@ -1016,7 +1016,7 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 		var children []database.LexiconEventProperty
 		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
 		for _, child := range children {
-			expanded = append(expanded, "prop_"+child.Name)
+			expanded = append(expanded, child.Name)
 		}
 	} else {
 		var children []database.LexiconProfileProperty
