@@ -306,12 +306,17 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 					for _, key := range keys {
 						var col string
+						isUserProp := strings.HasPrefix(key, "user_")
 
 						// Determine column and path
 						if strings.HasPrefix(key, "prop_") {
 							col = fmt.Sprintf("properties['%s']", key[5:])
 						} else if key == "event_name" || key == "distinct_id" || key == "lib_version" || key == "timestamp" {
 							col = key
+						} else if isUserProp {
+							col = fmt.Sprintf("properties['%s']", key[5:])
+						} else if strings.HasPrefix(key, "default_") {
+							col = fmt.Sprintf("default_properties['%s']", key[8:])
 						} else {
 							col = fmt.Sprintf("default_properties['%s']", key)
 						}
@@ -417,6 +422,10 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 								} else {
 									if strings.HasPrefix(key, "prop_") {
 										propClauses = append(propClauses, fmt.Sprintf("mapContains(properties, '%s')", key[5:]))
+									} else if isUserProp {
+										propClauses = append(propClauses, fmt.Sprintf("mapContains(properties, '%s')", key[5:]))
+									} else if strings.HasPrefix(key, "default_") {
+										propClauses = append(propClauses, fmt.Sprintf("mapContains(default_properties, '%s')", key[8:]))
 									} else {
 										propClauses = append(propClauses, fmt.Sprintf("mapContains(default_properties, '%s')", key))
 									}
@@ -427,6 +436,10 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 						case "is_not_set":
 							if strings.HasPrefix(key, "prop_") {
 								propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(properties, '%s')", key[5:]))
+							} else if isUserProp {
+								propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(properties, '%s')", key[5:]))
+							} else if strings.HasPrefix(key, "default_") {
+								propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(default_properties, '%s')", key[8:]))
 							} else {
 								propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(default_properties, '%s')", key))
 							}
@@ -481,7 +494,21 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 						if isNegative {
 							joinOp = " AND "
 						}
-						andClauses = append(andClauses, "("+strings.Join(propClauses, joinOp)+")")
+
+						subCond := strings.Join(propClauses, joinOp)
+
+						// Wrap User property checks in a subquery
+						if strings.HasPrefix(f.Property, "user_") {
+							subCond = fmt.Sprintf("distinct_id IN (SELECT distinct_id FROM persons WHERE project_id = ? AND environment = ? AND (%s))", subCond)
+							// Prepend projID and environment to propArgs
+							newArgs := []interface{}{projID, environment}
+							newArgs = append(newArgs, propArgs...)
+							propArgs = newArgs
+						} else {
+							subCond = "(" + subCond + ")"
+						}
+
+						andClauses = append(andClauses, subCond)
 						queryArgs = append(queryArgs, propArgs...)
 					}
 				}
@@ -853,8 +880,11 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 			col = fmt.Sprintf("properties['%s']", key[5:])
 		} else if key == "event_name" || key == "distinct_id" || key == "lib_version" || key == "timestamp" {
 			col = key
+		} else if strings.HasPrefix(key, "default_") {
+			rawKey := key[8:]
+			col = fmt.Sprintf("if(mapContains(default_properties, '$%s'), default_properties['$%s'], default_properties['%s'])", rawKey, rawKey, rawKey)
 		} else {
-			col = fmt.Sprintf("default_properties['%s']", key)
+			col = fmt.Sprintf("if(mapContains(default_properties, '$%s'), default_properties['$%s'], default_properties['%s'])", key, key, key)
 		}
 
 		// Build Query
