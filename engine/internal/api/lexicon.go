@@ -31,6 +31,7 @@ func (h *LexiconHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	// Events
 	lexicon.Get("/events", h.ListEvents)
 	lexicon.Put("/events/:id", h.UpdateEvent)
+	lexicon.Delete("/events/:id", h.DeleteEvent)
 	lexicon.Post("/events/merge", h.MergeEvents)
 
 	// Event Properties
@@ -219,6 +220,42 @@ func (h *LexiconHandler) MergeEvents(c *fiber.Ctx) error {
 				"hidden":         true, // Hide merged children from UI
 				"updated_at":     time.Now(),
 			}).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// DeleteEvent handles deleting an event from the lexicon. If virtual, it unmerges its children.
+func (h *LexiconHandler) DeleteEvent(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	id := c.Params("id")
+
+	return h.DB.Transaction(func(tx *gorm.DB) error {
+		var event database.LexiconEvent
+		if err := tx.Where("project_id = ? AND id = ?", project.ID, id).First(&event).Error; err != nil {
+			return err
+		}
+
+		// If this is a virtual event, we must unhide its children and detach them
+		if event.IsVirtual {
+			if err := tx.Model(&database.LexiconEvent{}).
+				Where("project_id = ? AND merged_into_id = ?", project.ID, event.ID).
+				Updates(map[string]interface{}{
+					"merged_into_id": gorm.Expr("NULL"),
+					"hidden":         false,
+					"updated_at":     time.Now(),
+				}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Delete the event
+		if err := tx.Delete(&event).Error; err != nil {
 			return err
 		}
 
