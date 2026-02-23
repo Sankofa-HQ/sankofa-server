@@ -33,6 +33,18 @@ type PersonProfile struct {
 	Aliases    []string          `json:"aliases"`
 }
 
+// EventWhereClause is a sub-filter on event properties (e.g. "where App Version is 1.0.0")
+type EventWhereClause struct {
+	ID               string `json:"id"`
+	Property         string `json:"property"`      // e.g. "prop_app_version"
+	PropertyLabel    string `json:"propertyLabel"` // Display label
+	PropertyType     string `json:"propertyType"`  // "string", "number", etc.
+	TrackedAs        string `json:"trackedAs"`     // Raw backend key e.g. "app_version"
+	Operator         string `json:"operator"`      // "is", "is_not", "contains", etc.
+	Value            string `json:"value"`
+	PropertyCategory string `json:"propertyCategory"` // "event", "default", "user", "system"
+}
+
 // Filter represents a unified filter from the frontend (user property or event)
 type Filter struct {
 	Id         string `json:"id"`
@@ -45,10 +57,122 @@ type Filter struct {
 	CohortID interface{} `json:"cohortId"` // Used by modern frontend for cohort filtering
 
 	// Event Filter Fields
-	BehaviorType string `json:"behaviorType"` // "did" or "did_not"
-	EventName    string `json:"eventName"`
-	Metric       string `json:"metric"`    // "total_events", "aggregate_sum", etc.
-	TimeRange    string `json:"timeRange"` // "30d", "24h", etc.
+	BehaviorType string             `json:"behaviorType"` // "did" or "did_not"
+	EventName    string             `json:"eventName"`
+	Metric       string             `json:"metric"`       // "total_events", "aggregate_sum", etc.
+	TimeRange    string             `json:"timeRange"`    // "30d", "24h", etc.
+	WhereFilters []EventWhereClause `json:"whereFilters"` // Sub-filters on event properties
+}
+
+// buildWhereClauseSQL converts where clauses into SQL conditions for the events table.
+// Event/default properties use mapUpdate(default_properties, properties) on the events table.
+// User properties use a subquery against the persons table.
+func buildWhereClauseSQL(clauses []EventWhereClause, projectID, environment string) (string, []interface{}) {
+	var conditions []string
+	var args []interface{}
+
+	for _, wc := range clauses {
+		if wc.Property == "" {
+			continue
+		}
+
+		// Determine the raw property key for ClickHouse
+		rawKey := wc.TrackedAs
+		if rawKey == "" {
+			rawKey = wc.Property
+		}
+		// Check if this is a user property before stripping prefixes
+		isUserProp := wc.PropertyCategory == "user" || strings.HasPrefix(rawKey, "user_")
+
+		// Strip frontend prefixes to get the actual property key
+		if strings.HasPrefix(rawKey, "prop_") {
+			rawKey = rawKey[5:]
+		} else if strings.HasPrefix(rawKey, "default_") {
+			rawKey = rawKey[8:]
+		} else if strings.HasPrefix(rawKey, "user_") {
+			rawKey = rawKey[5:]
+		}
+		rawKey = sanitizeKey(rawKey)
+
+		if isUserProp {
+			// User properties: check against the persons table via subquery
+			personPropExpr := fmt.Sprintf("sub.props['%s']", rawKey)
+			personSubBase := "SELECT distinct_id FROM (SELECT distinct_id, argMax(properties, last_seen) AS props FROM persons WHERE project_id = ? AND environment = ? GROUP BY distinct_id) sub WHERE "
+
+			switch wc.Operator {
+			case "is":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%s%s = ?)", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "is_not":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%s%s != ?)", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "contains":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%spositionCaseInsensitive(%s, ?) > 0)", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "does_not_contain":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%spositionCaseInsensitive(%s, ?) = 0)", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "is_set":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%smapContains(sub.props, '%s'))", personSubBase, rawKey))
+				args = append(args, projectID, environment)
+			case "is_not_set":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%sNOT mapContains(sub.props, '%s'))", personSubBase, rawKey))
+				args = append(args, projectID, environment)
+			case "gt":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%stoFloat64OrZero(%s) > toFloat64OrZero(?))", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "lt":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%stoFloat64OrZero(%s) < toFloat64OrZero(?))", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "gte":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%stoFloat64OrZero(%s) >= toFloat64OrZero(?))", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			case "lte":
+				conditions = append(conditions, fmt.Sprintf("distinct_id IN (%stoFloat64OrZero(%s) <= toFloat64OrZero(?))", personSubBase, personPropExpr))
+				args = append(args, projectID, environment, wc.Value)
+			}
+		} else {
+			// Event/default properties: check on the events table directly
+			propExpr := fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", rawKey)
+
+			switch wc.Operator {
+			case "is":
+				conditions = append(conditions, fmt.Sprintf("%s = ?", propExpr))
+				args = append(args, wc.Value)
+			case "is_not":
+				conditions = append(conditions, fmt.Sprintf("%s != ?", propExpr))
+				args = append(args, wc.Value)
+			case "contains":
+				conditions = append(conditions, fmt.Sprintf("positionCaseInsensitive(%s, ?) > 0", propExpr))
+				args = append(args, wc.Value)
+			case "does_not_contain":
+				conditions = append(conditions, fmt.Sprintf("positionCaseInsensitive(%s, ?) = 0", propExpr))
+				args = append(args, wc.Value)
+			case "is_set":
+				conditions = append(conditions, fmt.Sprintf("mapContains(mapUpdate(default_properties, properties), '%s')", rawKey))
+			case "is_not_set":
+				conditions = append(conditions, fmt.Sprintf("NOT mapContains(mapUpdate(default_properties, properties), '%s')", rawKey))
+			case "gt":
+				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) > toFloat64OrZero(?)", propExpr))
+				args = append(args, wc.Value)
+			case "lt":
+				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) < toFloat64OrZero(?)", propExpr))
+				args = append(args, wc.Value)
+			case "gte":
+				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) >= toFloat64OrZero(?)", propExpr))
+				args = append(args, wc.Value)
+			case "lte":
+				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) <= toFloat64OrZero(?)", propExpr))
+				args = append(args, wc.Value)
+			}
+		}
+	}
+
+	if len(conditions) == 0 {
+		return "", nil
+	}
+
+	return strings.Join(conditions, " AND "), args
 }
 
 // sanitizeKey removes any characters that could cause SQL injection in property key names
@@ -272,6 +396,14 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						subArgs = append(subArgs, timeArgs...)
 					}
 
+					// 2b. Apply where clause filters on event properties
+					if len(f.WhereFilters) > 0 {
+						wcSQL, wcArgs := buildWhereClauseSQL(f.WhereFilters, projID, environment)
+						if wcSQL != "" {
+							subQuery += " AND " + wcSQL
+							subArgs = append(subArgs, wcArgs...)
+						}
+					}
 					// 3. Aggregation / Having Clause
 					havingClause := ""
 					metricOp := ""

@@ -154,6 +154,15 @@ func buildFiltersSQL(db *gorm.DB, projectID string, env string, filters []Filter
 				eventArgs = append(eventArgs, timeArgs...)
 			}
 
+			// Where clause filters on event properties
+			if len(f.WhereFilters) > 0 {
+				wcSQL, wcArgs := buildWhereClauseSQL(f.WhereFilters, projectID, env)
+				if wcSQL != "" {
+					eventSub += " AND " + wcSQL
+					eventArgs = append(eventArgs, wcArgs...)
+				}
+			}
+
 			// Metric Operator
 			metricOp := ">="
 			switch f.Operator {
