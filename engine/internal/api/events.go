@@ -861,6 +861,15 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 	search := c.Query("search", "")
 	eventName := c.Query("event_name", "")
 
+	// Expand merged/virtual event names
+	var expandedEventNames []string
+	if eventName != "" {
+		expandedEventNames = ExpandVirtualEventNames(h.DB, project.ID, []string{eventName})
+		if len(expandedEventNames) == 0 {
+			expandedEventNames = []string{eventName}
+		}
+	}
+
 	if property == "" {
 		return c.JSON(fiber.Map{"values": []string{}})
 	}
@@ -895,9 +904,15 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 		`, col, col, col)
 		args = append(args, project.ID, environment)
 
-		if eventName != "" {
-			subQuery += " AND event_name = ?"
-			args = append(args, eventName)
+		if len(expandedEventNames) > 0 {
+			ph := make([]string, len(expandedEventNames))
+			for i := range expandedEventNames {
+				ph[i] = "?"
+			}
+			subQuery += " AND event_name IN (" + strings.Join(ph, ",") + ")"
+			for _, en := range expandedEventNames {
+				args = append(args, en)
+			}
 		}
 
 		if search != "" {

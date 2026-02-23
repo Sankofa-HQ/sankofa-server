@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 
 	"sankofa/engine/internal/database"
 
@@ -49,28 +51,47 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing event_name parameter"})
 	}
 
-	// query event property keys
-	query := `
+	// Expand virtual/merged event names into their constituent event names
+	expandedNames := ExpandVirtualEventNames(h.DB, project.ID, []string{eventName})
+	if len(expandedNames) == 0 {
+		expandedNames = []string{eventName}
+	}
+
+	// Build placeholders for the IN clause
+	placeholders := make([]string, len(expandedNames))
+	queryArgs := make([]interface{}, 0, 2+len(expandedNames)*2)
+	queryArgs = append(queryArgs, project.ID, environment)
+	for i, name := range expandedNames {
+		placeholders[i] = "?"
+		queryArgs = append(queryArgs, name)
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	// Duplicate args for the UNION ALL second half
+	queryArgs = append(queryArgs, project.ID, environment)
+	for _, name := range expandedNames {
+		queryArgs = append(queryArgs, name)
+	}
+
+	// query event property keys from all constituent events
+	query := fmt.Sprintf(`
 		SELECT DISTINCT key 
 		FROM (
 			SELECT arrayJoin(mapKeys(properties)) AS key
 			FROM events
-			WHERE project_id = ? AND environment = ? AND event_name = ?
+			WHERE project_id = ? AND environment = ? AND event_name IN (%s)
 			
 			UNION ALL
 			
 			SELECT arrayJoin(mapKeys(default_properties)) AS key
 			FROM events
-			WHERE project_id = ? AND environment = ? AND event_name = ?
+			WHERE project_id = ? AND environment = ? AND event_name IN (%s)
 		) AS combined
 		ORDER BY key
 		LIMIT 1000
-	`
+	`, inClause, inClause)
 
-	rows, err := h.CH.Query(context.Background(), query,
-		project.ID, environment, eventName,
-		project.ID, environment, eventName,
-	)
+	rows, err := h.CH.Query(context.Background(), query, queryArgs...)
 	if err != nil {
 		log.Println("ClickHouse Query Error:", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to query event properties"})
