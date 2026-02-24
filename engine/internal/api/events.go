@@ -635,21 +635,24 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 	}
 
 	// Fetch from Lexicon (SQLite) - The "Gatekeeper" source of truth
-	var lexiconEvents []database.LexiconEvent
-	if err := h.DB.Model(&database.LexiconEvent{}).
-		Where("project_id = ? AND hidden = ?", project.ID, false).
-		Order("name ASC").
-		Find(&lexiconEvents).Error; err != nil {
-		log.Println("Lexicon Query Error:", err)
-	}
+	var totalLexiconEvents int64
+	h.DB.Model(&database.LexiconEvent{}).Where("project_id = ?", project.ID).Count(&totalLexiconEvents)
 
 	var eventNames []string
-	for _, e := range lexiconEvents {
-		eventNames = append(eventNames, e.Name)
-	}
 
-	// Fallback: if Lexicon is empty, query ClickHouse directly
-	if len(eventNames) == 0 {
+	if totalLexiconEvents > 0 {
+		var lexiconEvents []database.LexiconEvent
+		if err := h.DB.Model(&database.LexiconEvent{}).
+			Where("project_id = ? AND status = ? AND hidden = ?", project.ID, "approved", false).
+			Order("name ASC").
+			Find(&lexiconEvents).Error; err != nil {
+			log.Println("Lexicon Query Error:", err)
+		}
+		for _, e := range lexiconEvents {
+			eventNames = append(eventNames, e.Name)
+		}
+	} else {
+		// Fallback: if Lexicon is empty, query ClickHouse directly
 		projID := project.ID
 		environment := c.Query("environment", "live")
 		rows, err := h.CH.Query(context.Background(),
@@ -804,11 +807,30 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 	virtualMap := h.getVirtualEventMapping(projID)
 	counts := make(map[string]uint64)
 
+	// Fetch Lexicon visibility rules
+	var lexEvents []database.LexiconEvent
+	h.DB.Select("name, status, hidden").Where("project_id = ?", projID).Find(&lexEvents)
+
+	lexiconActive := len(lexEvents) > 0
+	allowMap := make(map[string]bool)
+	for _, le := range lexEvents {
+		if le.Status == "approved" && !le.Hidden {
+			allowMap[le.Name] = true
+		}
+	}
+
 	for rows.Next() {
 		var name string
 		var cnt uint64
 		if err := rows.Scan(&name, &cnt); err != nil {
 			continue
+		}
+
+		// Enforce Lexicon gatekeeping if Lexicon is active for this project
+		if lexiconActive {
+			if !allowMap[name] {
+				continue
+			}
 		}
 
 		// If this event is merged into a virtual event, aggregate under the virtual event's name
