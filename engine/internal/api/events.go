@@ -986,6 +986,11 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 		return []string{}
 	}
 
+	// Default properties (default_xxx) are never virtual/merged — return as-is
+	if strings.HasPrefix(propName, "default_") {
+		return []string{propName}
+	}
+
 	isEventProp := strings.HasPrefix(propName, "prop_")
 	rawName := propName
 	if isEventProp {
