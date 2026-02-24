@@ -53,6 +53,7 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 
 	if eventName == "" {
 		// "All Events" — query properties across ALL events for this project
+		// Tag default properties with 'default:' prefix so frontend can distinguish them
 		query = `
 			SELECT DISTINCT key 
 			FROM (
@@ -62,7 +63,7 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 				
 				UNION ALL
 				
-				SELECT arrayJoin(mapKeys(default_properties)) AS key
+				SELECT concat('default:', arrayJoin(mapKeys(default_properties))) AS key
 				FROM events
 				WHERE project_id = ? AND environment = ?
 			) AS combined
@@ -102,7 +103,7 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 				
 				UNION ALL
 				
-				SELECT arrayJoin(mapKeys(default_properties)) AS key
+				SELECT concat('default:', arrayJoin(mapKeys(default_properties))) AS key
 				FROM events
 				WHERE project_id = ? AND environment = ? AND event_name IN (%s)
 			) AS combined
