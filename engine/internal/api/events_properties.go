@@ -138,14 +138,22 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 // applyLexiconToEventProperties takes a list of raw property keys from ClickHouse,
 // maps them against the LexiconEventProperty table in SQLite, hides any properties that are merged
 // into a virtual property, and adds the virtual properties themselves if they aren't already included.
+// Keys may have a "default:" prefix to indicate they come from default_properties.
 func applyLexiconToEventProperties(db *gorm.DB, projectID string, rawKeys []string) []string {
 	if len(rawKeys) == 0 {
 		return rawKeys
 	}
 
 	rawSet := make(map[string]bool)
+	// Build a reverse map: clean name → prefixed key (e.g. "os" → "default:os")
+	cleanToRaw := make(map[string]string)
 	for _, k := range rawKeys {
 		rawSet[k] = true
+		clean := k
+		if strings.HasPrefix(k, "default:") {
+			clean = k[8:]
+		}
+		cleanToRaw[clean] = k
 	}
 
 	var allLexiconProps []database.LexiconEventProperty
@@ -157,15 +165,18 @@ func applyLexiconToEventProperties(db *gorm.DB, projectID string, rawKeys []stri
 	mergedTargetsMap := make(map[string]bool) // virtual IDs we need to add
 
 	for _, p := range allLexiconProps {
-		if p.Hidden {
-			hiddenMap[p.Name] = true
+		// Check if this lexicon property exists in rawSet (with or without prefix)
+		prefixedKey, existsInRaw := cleanToRaw[p.Name]
+
+		if p.Hidden && existsInRaw {
+			hiddenMap[prefixedKey] = true
 		}
 		if p.MergedIntoID != nil && *p.MergedIntoID != "" {
 			// If a raw property was in our original list, and it's merged into a target,
 			// hide the child and ensure the virtual parent is in the list
-			if rawSet[p.Name] {
+			if existsInRaw {
 				mergedTargetsMap[*p.MergedIntoID] = true
-				hiddenMap[p.Name] = true // Hide the child that's merged into a virtual
+				hiddenMap[prefixedKey] = true // Hide the child that's merged into a virtual
 			}
 		}
 	}
@@ -174,8 +185,7 @@ func applyLexiconToEventProperties(db *gorm.DB, projectID string, rawKeys []stri
 	if len(mergedTargetsMap) > 0 {
 		for _, p := range allLexiconProps {
 			if mergedTargetsMap[p.ID] {
-				// Keep the underlying machine name for querying, the frontend Lexicon context
-				// handles displaying the human-readable 'DisplayName'.
+				// Virtual/merged properties are event properties (not default), so no prefix
 				rawSet[p.Name] = true
 			}
 		}
