@@ -231,9 +231,10 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	}
 
 	type Request struct {
-		Name        string `json:"name"`
-		Timezone    string `json:"timezone"`
-		Environment string `json:"environment"`
+		Name              string `json:"name"`
+		Timezone          string `json:"timezone"`
+		Environment       string `json:"environment"`
+		AutoApproveEvents *bool  `json:"auto_approve_events"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
@@ -252,7 +253,7 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 
 	// 2. Update
 	var project database.Project
-	if err := h.DB.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := h.DB.Preload("Organization").First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
 
@@ -264,6 +265,9 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	}
 	if req.Environment != "" {
 		project.Environment = req.Environment
+	}
+	if req.AutoApproveEvents != nil {
+		project.AutoApproveEvents = *req.AutoApproveEvents
 	}
 
 	if err := h.DB.Save(&project).Error; err != nil {
