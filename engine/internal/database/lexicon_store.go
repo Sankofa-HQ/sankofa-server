@@ -17,6 +17,7 @@ type LexiconStore struct {
 	DB               *gorm.DB
 	eventNameCache   sync.Map // Key: "projectID:eventName" -> Value: eventID (string)
 	propertyCache    sync.Map // Key: "projectID:eventName:propertyName" -> Value: true
+	projectSettings  sync.Map // Key: projectID -> Value: bool (autoApproveEvents)
 	newLexiconQueue  chan lexiconEntry
 	newPropertyQueue chan propertyEntry
 	flushInterval    time.Duration
@@ -201,9 +202,11 @@ func (s *LexiconStore) insertEventBatch(batch []lexiconEntry) {
 	now := time.Now()
 
 	for _, entry := range uniqueEntries {
+		status := s.resolveStatus(entry.ProjectID)
 		eventsToInsert = append(eventsToInsert, LexiconEvent{
 			ProjectID:   entry.ProjectID,
 			Name:        entry.EventName,
+			Status:      status,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 			DisplayName: entry.EventName,
@@ -275,10 +278,12 @@ func (s *LexiconStore) insertPropBatch(batch []propertyEntry) {
 		}
 
 		eID := eventID
+		status := s.resolveStatus(entry.ProjectID)
 		propsToInsert = append(propsToInsert, LexiconEventProperty{
 			ProjectID:   entry.ProjectID,
 			EventID:     &eID,
 			Name:        entry.Name,
+			Status:      status,
 			Type:        entry.Type,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -298,4 +303,29 @@ func (s *LexiconStore) insertPropBatch(batch []propertyEntry) {
 			log.Printf("📥 Registered %d new Lexicon properties", len(propsToInsert))
 		}
 	}
+}
+
+// resolveStatus determines the initial status for new Lexicon items based on project settings.
+// Returns "approved" if auto-approve is on (default), "pending" if manual review is required.
+func (s *LexiconStore) resolveStatus(projectID string) string {
+	// Check cache first
+	if val, ok := s.projectSettings.Load(projectID); ok {
+		if autoApprove, _ := val.(bool); !autoApprove {
+			return "pending"
+		}
+		return "approved"
+	}
+
+	// Query DB and cache
+	var proj Project
+	autoApprove := true // default
+	if err := s.DB.Select("auto_approve_events").Where("id = ?", projectID).First(&proj).Error; err == nil {
+		autoApprove = proj.AutoApproveEvents
+	}
+	s.projectSettings.Store(projectID, autoApprove)
+
+	if !autoApprove {
+		return "pending"
+	}
+	return "approved"
 }

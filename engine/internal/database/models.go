@@ -57,19 +57,20 @@ func (o *Organization) BeforeCreate(tx *gorm.DB) (err error) {
 
 // Project is a container for events (e.g., Staging vs Prod).
 type Project struct {
-	ID             string        `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	OrganizationID string        `gorm:"not null;index;type:varchar(32)" json:"organization_id"` // FK
-	Organization   *Organization `json:"organization" gorm:"foreignKey:OrganizationID"`
-	Name           string        `gorm:"not null" json:"name"`
-	APIKey         string        `gorm:"uniqueIndex;not null" json:"api_key"` // sk_live_...
-	TestAPIKey     string        `gorm:"uniqueIndex" json:"test_api_key"`     // sk_test_...
-	Environment    string        `gorm:"default:'live'" json:"environment"`   // live, test
-	Timezone       string        `gorm:"default:'Africa/Accra'" json:"timezone"`
-	Region         string        `gorm:"default:'eu-west-1'" json:"region"`
-	CreatedByID    string        `json:"created_by_id" gorm:"column:created_by_id;index;type:varchar(32)"`
-	CreatedBy      *User         `json:"created_by" gorm:"foreignKey:CreatedByID"`
-	CreatedAt      time.Time     `json:"created_at"`
-	UpdatedAt      time.Time     `json:"updated_at"`
+	ID                string        `gorm:"primaryKey;type:varchar(32)" json:"id"`
+	OrganizationID    string        `gorm:"not null;index;type:varchar(32)" json:"organization_id"` // FK
+	Organization      *Organization `json:"organization" gorm:"foreignKey:OrganizationID"`
+	Name              string        `gorm:"not null" json:"name"`
+	APIKey            string        `gorm:"uniqueIndex;not null" json:"api_key"` // sk_live_...
+	TestAPIKey        string        `gorm:"uniqueIndex" json:"test_api_key"`     // sk_test_...
+	Environment       string        `gorm:"default:'live'" json:"environment"`   // live, test
+	Timezone          string        `gorm:"default:'Africa/Accra'" json:"timezone"`
+	Region            string        `gorm:"default:'eu-west-1'" json:"region"`
+	AutoApproveEvents bool          `gorm:"default:true" json:"auto_approve_events"` // If false, new events enter quarantine as 'pending'
+	CreatedByID       string        `json:"created_by_id" gorm:"column:created_by_id;index;type:varchar(32)"`
+	CreatedBy         *User         `json:"created_by" gorm:"foreignKey:CreatedByID"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 func (p *Project) BeforeCreate(tx *gorm.DB) (err error) {

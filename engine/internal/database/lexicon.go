@@ -14,9 +14,10 @@ type LexiconEvent struct {
 	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_event_name" json:"name"` // The raw event name (e.g., "signup_completed")
 	DisplayName  string      `json:"display_name"`                                                  // Friendly name (e.g., "Sign Up Completed")
 	Description  string      `json:"description"`
-	Hidden       bool        `gorm:"default:false" json:"hidden"`     // Hides from UI filters
-	Dropped      bool        `gorm:"default:false" json:"dropped"`    // Instructs ingestion to drop this event
-	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"` // True if this is a merged/virtual event
+	Status       string      `gorm:"default:'approved';index" json:"status"` // 'pending', 'approved', 'rejected'
+	Hidden       bool        `gorm:"default:false" json:"hidden"`            // Legacy: now mapped by status=rejected
+	Dropped      bool        `gorm:"default:false" json:"dropped"`           // Instructs ingestion to drop this event
+	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"`        // True if this is a merged/virtual event
 	MergedIntoID *string     `gorm:"type:varchar(32)" json:"merged_into_id"`
 	Tags         StringArray `gorm:"type:text" json:"tags"`
 	CreatedAt    time.Time   `json:"created_at"`
@@ -42,7 +43,8 @@ type LexiconEventProperty struct {
 	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_event_prop_name" json:"name"`             // The raw property name (e.g., "browser")
 	DisplayName  string      `json:"display_name"`
 	Description  string      `json:"description"`
-	ExampleValue string      `json:"example_value"` // Sample value for documentation
+	ExampleValue string      `json:"example_value"`                          // Sample value for documentation
+	Status       string      `gorm:"default:'approved';index" json:"status"` // 'pending', 'approved', 'rejected'
 	Hidden       bool        `gorm:"default:false" json:"hidden"`
 	Dropped      bool        `gorm:"default:false" json:"dropped"`
 	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"` // True if this is a merged/virtual property
@@ -73,6 +75,7 @@ type LexiconProfileProperty struct {
 	DisplayName  string      `json:"display_name"`
 	Description  string      `json:"description"`
 	ExampleValue string      `json:"example_value"`
+	Status       string      `gorm:"default:'approved';index" json:"status"` // 'pending', 'approved', 'rejected'
 	Hidden       bool        `gorm:"default:false" json:"hidden"`
 	Dropped      bool        `gorm:"default:false" json:"dropped"`
 	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"` // True if this is a merged/virtual property

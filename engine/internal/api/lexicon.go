@@ -28,23 +28,96 @@ func NewLexiconHandler(db *gorm.DB, ch driver.Conn) *LexiconHandler {
 func (h *LexiconHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
 	lexicon := router.Group("/lexicon", authMiddleware)
 
+	// Summary (notification badge counts)
+	lexicon.Get("/summary", h.LexiconSummary)
+
 	// Events
 	lexicon.Get("/events", h.ListEvents)
 	lexicon.Put("/events/:id", h.UpdateEvent)
+	lexicon.Put("/events/:id/status", h.UpdateEventStatus)
 	lexicon.Delete("/events/:id", h.DeleteEvent)
 	lexicon.Post("/events/merge", h.MergeEvents)
 
 	// Event Properties
 	lexicon.Get("/event-properties", h.ListEventProperties)
 	lexicon.Put("/event-properties/:id", h.UpdateEventProperty)
+	lexicon.Put("/event-properties/:id/status", h.UpdateEventPropertyStatus)
 	lexicon.Delete("/event-properties/:id", h.DeleteEventProperty)
 	lexicon.Post("/event-properties/merge", h.MergeEventProperties)
 
 	// Profile Properties
 	lexicon.Get("/profile-properties", h.ListProfileProperties)
 	lexicon.Put("/profile-properties/:id", h.UpdateProfileProperty)
+	lexicon.Put("/profile-properties/:id/status", h.UpdateProfilePropertyStatus)
 	lexicon.Delete("/profile-properties/:id", h.DeleteProfileProperty)
 	lexicon.Post("/profile-properties/merge", h.MergeProfileProperties)
+}
+
+// --- SUMMARY ---
+
+// LexiconSummary returns counts of events/properties by status for notification badges.
+func (h *LexiconHandler) LexiconSummary(c *fiber.Ctx) error {
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	type statusCount struct {
+		Status string `json:"status"`
+		Count  int64  `json:"count"`
+	}
+
+	// Count events by status
+	var eventCounts []statusCount
+	h.DB.Model(&database.LexiconEvent{}).
+		Select("status, count(*) as count").
+		Where("project_id = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '')", project.ID).
+		Group("status").
+		Find(&eventCounts)
+
+	// Count event properties by status
+	var propCounts []statusCount
+	h.DB.Model(&database.LexiconEventProperty{}).
+		Select("status, count(*) as count").
+		Where("project_id = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '')", project.ID).
+		Group("status").
+		Find(&propCounts)
+
+	result := fiber.Map{
+		"events_pending":  int64(0),
+		"events_approved": int64(0),
+		"events_rejected": int64(0),
+		"props_pending":   int64(0),
+		"props_approved":  int64(0),
+		"props_rejected":  int64(0),
+		"total_pending":   int64(0),
+	}
+
+	for _, ec := range eventCounts {
+		switch ec.Status {
+		case "pending":
+			result["events_pending"] = ec.Count
+		case "approved":
+			result["events_approved"] = ec.Count
+		case "rejected":
+			result["events_rejected"] = ec.Count
+		}
+	}
+	for _, pc := range propCounts {
+		switch pc.Status {
+		case "pending":
+			result["props_pending"] = pc.Count
+		case "approved":
+			result["props_approved"] = pc.Count
+		case "rejected":
+			result["props_rejected"] = pc.Count
+		}
+	}
+
+	// Total pending for badge
+	result["total_pending"] = result["events_pending"].(int64) + result["props_pending"].(int64)
+
+	return c.JSON(result)
 }
 
 // --- EVENTS ---
@@ -155,6 +228,9 @@ func (h *LexiconHandler) UpdateEvent(c *fiber.Ctx) error {
 	}
 	if v, ok := body["dropped"]; ok {
 		updates["dropped"] = v
+	}
+	if v, ok := body["status"]; ok {
+		updates["status"] = v
 	}
 	if v, ok := body["tags"]; ok {
 		tagsVal, _ := toStringArray(v)
@@ -411,6 +487,9 @@ func (h *LexiconHandler) UpdateEventProperty(c *fiber.Ctx) error {
 	if v, ok := body["dropped"]; ok {
 		updates["dropped"] = v
 	}
+	if v, ok := body["status"]; ok {
+		updates["status"] = v
+	}
 	if v, ok := body["type"]; ok {
 		updates["type"] = v
 	}
@@ -635,6 +714,9 @@ func (h *LexiconHandler) UpdateProfileProperty(c *fiber.Ctx) error {
 	if v, ok := body["dropped"]; ok {
 		updates["dropped"] = v
 	}
+	if v, ok := body["status"]; ok {
+		updates["status"] = v
+	}
 	if v, ok := body["type"]; ok {
 		updates["type"] = v
 	}
@@ -759,6 +841,80 @@ func (h *LexiconHandler) DeleteProfileProperty(c *fiber.Ctx) error {
 
 		return nil
 	})
+}
+
+// --- STATUS UPDATE HANDLERS ---
+
+// UpdateEventStatus updates the status of a Lexicon event (pending/approved/rejected).
+func (h *LexiconHandler) UpdateEventStatus(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := c.BodyParser(&body); err != nil || body.Status == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "status is required (pending, approved, rejected)"})
+	}
+	if body.Status != "pending" && body.Status != "approved" && body.Status != "rejected" {
+		return c.Status(400).JSON(fiber.Map{"error": "status must be pending, approved, or rejected"})
+	}
+
+	updates := map[string]interface{}{
+		"status":     body.Status,
+		"hidden":     body.Status == "rejected",
+		"updated_at": time.Now(),
+	}
+	if err := h.DB.Model(&database.LexiconEvent{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update status"})
+	}
+	return c.JSON(fiber.Map{"success": true, "status": body.Status})
+}
+
+// UpdateEventPropertyStatus updates the status of a Lexicon event property.
+func (h *LexiconHandler) UpdateEventPropertyStatus(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := c.BodyParser(&body); err != nil || body.Status == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "status is required (pending, approved, rejected)"})
+	}
+	if body.Status != "pending" && body.Status != "approved" && body.Status != "rejected" {
+		return c.Status(400).JSON(fiber.Map{"error": "status must be pending, approved, or rejected"})
+	}
+
+	updates := map[string]interface{}{
+		"status":     body.Status,
+		"hidden":     body.Status == "rejected",
+		"updated_at": time.Now(),
+	}
+	if err := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update status"})
+	}
+	return c.JSON(fiber.Map{"success": true, "status": body.Status})
+}
+
+// UpdateProfilePropertyStatus updates the status of a Lexicon profile property.
+func (h *LexiconHandler) UpdateProfilePropertyStatus(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := c.BodyParser(&body); err != nil || body.Status == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "status is required (pending, approved, rejected)"})
+	}
+	if body.Status != "pending" && body.Status != "approved" && body.Status != "rejected" {
+		return c.Status(400).JSON(fiber.Map{"error": "status must be pending, approved, or rejected"})
+	}
+
+	updates := map[string]interface{}{
+		"status":     body.Status,
+		"hidden":     body.Status == "rejected",
+		"updated_at": time.Now(),
+	}
+	if err := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update status"})
+	}
+	return c.JSON(fiber.Map{"success": true, "status": body.Status})
 }
 
 // --- HELPERS ---
