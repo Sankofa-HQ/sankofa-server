@@ -41,6 +41,18 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	// Ensure projectID is populated from URL path overrides body
 	req.ProjectID = projectID
 
+	// Evaluate merged events
+	for i, step := range req.Steps {
+		if step.EventName != "" {
+			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, []string{step.EventName})
+			if len(expanded) > 0 {
+				req.Steps[i].ExpandedEvents = expanded
+			} else {
+				req.Steps[i].ExpandedEvents = []string{step.EventName}
+			}
+		}
+	}
+
 	var query string
 	var args []any
 
@@ -62,7 +74,7 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	var results []fiber.Map
+	results := []fiber.Map{}
 	cols := rows.Columns()
 	colTypes := rows.ColumnTypes()
 

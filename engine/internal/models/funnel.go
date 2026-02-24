@@ -24,11 +24,12 @@ type Filter struct {
 }
 
 type FunnelStep struct {
-	ID         int      `json:"id"`
-	Type       string   `json:"type"` // "event", "exclusion"
-	EventName  string   `json:"event_name"`
-	Filters    []Filter `json:"filters"`
-	TimeToNext *int     `json:"time_to_next,omitempty"` // Seconds. Pointer so it can be null.
+	ID             int      `json:"id"`
+	Type           string   `json:"type"` // "event", "exclusion"
+	EventName      string   `json:"event_name"`
+	ExpandedEvents []string `json:"-"`
+	Filters        []Filter `json:"filters"`
+	TimeToNext     *int     `json:"time_to_next,omitempty"` // Seconds. Pointer so it can be null.
 }
 
 func RequiresSequenceMatch(req FunnelRequest) bool {

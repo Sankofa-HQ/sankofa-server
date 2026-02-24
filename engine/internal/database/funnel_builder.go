@@ -30,11 +30,25 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 	// 2. Build windowFunnel conditions
 	var conditions []string
 	for _, step := range req.Steps {
-		cond := fmt.Sprintf("event_name = '%s'", escapeString(step.EventName))
+		var cond string
+		if len(step.ExpandedEvents) > 1 {
+			var escaped []string
+			for _, ev := range step.ExpandedEvents {
+				escaped = append(escaped, fmt.Sprintf("'%s'", escapeString(ev)))
+			}
+			cond = fmt.Sprintf("event_name IN (%s)", strings.Join(escaped, ", "))
+		} else {
+			eventName := step.EventName
+			if len(step.ExpandedEvents) == 1 {
+				eventName = step.ExpandedEvents[0]
+			}
+			cond = fmt.Sprintf("event_name = '%s'", escapeString(eventName))
+		}
+
 		if len(step.Filters) > 0 {
 			filterStmt, filterArgs := buildFilterConds(step.Filters)
 			if filterStmt != "" {
-				cond += " AND " + filterStmt
+				cond = cond + " AND " + filterStmt
 				args = append(args, filterArgs...)
 			}
 		}
@@ -112,14 +126,14 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		outerGroupBys = append(outerGroupBys, alias)
 	}
 
-	outerSelects = append(outerSelects, "level", "count(DISTINCT distinct_id) as users_at_level")
-	outerGroupBys = append(outerGroupBys, "level")
+	outerSelects = append(outerSelects, "arrayJoin(range(1, toUInt32(level) + 1)) AS funnel_level", "count(DISTINCT distinct_id) as users_at_level")
+	outerGroupBys = append(outerGroupBys, "funnel_level")
 
 	outerOrderBy := make([]string, 0)
 	if len(breakdownAliases) > 0 {
 		outerOrderBy = append(outerOrderBy, breakdownAliases...)
 	}
-	outerOrderBy = append(outerOrderBy, "level ASC")
+	outerOrderBy = append(outerOrderBy, "funnel_level ASC")
 
 	finalQuery := fmt.Sprintf(`SELECT 
     %s
@@ -129,6 +143,28 @@ FROM (
 WHERE level > 0
 GROUP BY %s
 ORDER BY %s`, strings.Join(outerSelects, ",\n    "), midQuery, strings.Join(outerGroupBys, ", "), strings.Join(outerOrderBy, ", "))
+
+	// Replace "funnel_level" back to "level" in outer result for frontend compatibility
+	finalQuery = strings.Replace(finalQuery, "funnel_level AS level", "funnel_level AS level", 1) // Safe generic replace
+	// To be very precise:
+	finalQuery = fmt.Sprintf(`SELECT 
+    %s
+FROM (
+    SELECT 
+        %s
+    FROM (
+        %s
+    )
+    WHERE level > 0
+)
+GROUP BY %s
+ORDER BY %s`,
+		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level"), ",\n    "),
+		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(level) + 1)) AS funnel_level", "distinct_id"), ",\n        "),
+		midQuery,
+		strings.Join(append(breakdownAliases, "funnel_level"), ", "),
+		strings.Join(append(breakdownAliases, "funnel_level ASC"), ", "),
+	)
 
 	return finalQuery, args
 }
@@ -235,11 +271,26 @@ func BuildSequenceMatchQuery(req models.FunnelRequest) (string, []any) {
 
 	for i, step := range req.Steps {
 		condName := fmt.Sprintf("cond_%d", i+1)
-		condExpr := fmt.Sprintf("event_name = '%s'", escapeString(step.EventName))
+
+		var condExpr string
+		if len(step.ExpandedEvents) > 1 {
+			var escaped []string
+			for _, ev := range step.ExpandedEvents {
+				escaped = append(escaped, fmt.Sprintf("'%s'", escapeString(ev)))
+			}
+			condExpr = fmt.Sprintf("event_name IN (%s)", strings.Join(escaped, ", "))
+		} else {
+			eventName := step.EventName
+			if len(step.ExpandedEvents) == 1 {
+				eventName = step.ExpandedEvents[0]
+			}
+			condExpr = fmt.Sprintf("event_name = '%s'", escapeString(eventName))
+		}
+
 		if len(step.Filters) > 0 {
 			filterStmt, filterArgs := buildFilterCondsNamed(step.Filters, fmt.Sprintf("step%d", i))
 			if filterStmt != "" {
-				condExpr += " AND " + filterStmt
+				condExpr = condExpr + " AND " + filterStmt
 				condArgs = append(condArgs, filterArgs...)
 			}
 		}
@@ -382,7 +433,24 @@ WHERE final_level > 0
 GROUP BY %s
 ORDER BY %s`, strings.Join(outerSelects, ",\n    "), aggQuery, strings.Join(outerGroupBys, ", "), strings.Join(outerOrderBys, ", "))
 
-	// Now fix innerQuery to include HoldConstants
+	finalQuery = fmt.Sprintf(`SELECT 
+    %s
+FROM (
+    SELECT 
+        %s
+    FROM (
+        %s
+    )
+    WHERE final_level > 0
+)
+GROUP BY %s
+ORDER BY %s`,
+		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level"), ",\n    "),
+		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(final_level) + 1)) AS funnel_level", "distinct_id"), ",\n        "),
+		aggQuery,
+		strings.Join(append(breakdownAliases, "funnel_level"), ", "),
+		strings.Join(append(breakdownAliases, "funnel_level ASC"), ", "),
+	)
 	var innerSelectsFixed []string
 	innerSelectsFixed = append(innerSelectsFixed, "distinct_id", "timestamp")
 	if len(breakdownSelects) > 0 {
@@ -421,15 +489,25 @@ FROM (
 )
 GROUP BY %s`, strings.Join(aggSelects, ", "), maxLevelQuery, strings.Join(aggGroupBys, ", "))
 
-	// Re-compose finalQuery
+	// Re-compose finalQuery completely
 	finalQuery = fmt.Sprintf(`SELECT 
     %s
 FROM (
-    %s
+    SELECT 
+        %s
+    FROM (
+        %s
+    )
+    WHERE final_level > 0
 )
-WHERE final_level > 0
 GROUP BY %s
-ORDER BY %s`, strings.Join(outerSelects, ",\n    "), aggQuery, strings.Join(outerGroupBys, ", "), strings.Join(outerOrderBys, ", "))
+ORDER BY %s`,
+		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level"), ",\n    "),
+		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(final_level) + 1)) AS funnel_level", "distinct_id"), ",\n        "),
+		aggQuery,
+		strings.Join(append(breakdownAliases, "funnel_level"), ", "),
+		strings.Join(append(breakdownAliases, "funnel_level ASC"), ", "),
+	)
 
 	return finalQuery, args
 }
