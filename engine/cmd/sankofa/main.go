@@ -181,6 +181,9 @@ func main() {
 	aliasStream := make(chan PersonAlias, BUFFER_SIZE)
 	doneChan := make(chan bool)
 
+	// Background Sync Workers
+	go database.StartStalenessSyncWorker(db, chConn)
+
 	go startEventWorker(ctx, chConn, eventStream, doneChan)
 	go startPersonWorker(ctx, chConn, personStream)
 	go startAliasWorker(ctx, chConn, aliasStream)

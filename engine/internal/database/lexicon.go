@@ -20,6 +20,7 @@ type LexiconEvent struct {
 	IsVirtual    bool        `gorm:"default:false" json:"is_virtual"`        // True if this is a merged/virtual event
 	MergedIntoID *string     `gorm:"type:varchar(32)" json:"merged_into_id"`
 	Tags         StringArray `gorm:"type:text" json:"tags"`
+	LastSeenAt   *time.Time  `json:"last_seen_at"`
 	CreatedAt    time.Time   `json:"created_at"`
 	UpdatedAt    time.Time   `json:"updated_at"`
 }
