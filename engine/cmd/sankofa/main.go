@@ -208,6 +208,7 @@ func main() {
 	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
 	peopleHandler := api.NewPeopleHandler(db, chConn)    // People
 	lexiconHandler := api.NewLexiconHandler(db, chConn)  // Lexicon
+	funnelsHandler := api.NewFunnelsHandler(db, chConn)  // Funnels
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -219,6 +220,7 @@ func main() {
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
 	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)  // Events under /api/v1/events
 	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth) // Lexicon under /api/v1/lexicon
+	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Funnels under /api/v1/projects/:id/funnels
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
