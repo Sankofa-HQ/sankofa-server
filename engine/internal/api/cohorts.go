@@ -156,7 +156,7 @@ func buildFiltersSQL(db *gorm.DB, projectID string, env string, filters []Filter
 
 			// Where clause filters on event properties
 			if len(f.WhereFilters) > 0 {
-				wcSQL, wcArgs := buildWhereClauseSQL(f.WhereFilters, projectID, env)
+				wcSQL, wcArgs := buildWhereClauseSQL(db, f.WhereFilters, projectID, env)
 				if wcSQL != "" {
 					eventSub += " AND " + wcSQL
 					eventArgs = append(eventArgs, wcArgs...)

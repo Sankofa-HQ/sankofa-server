@@ -67,7 +67,8 @@ type Filter struct {
 // buildWhereClauseSQL converts where clauses into SQL conditions for the events table.
 // Event/default properties use mapUpdate(default_properties, properties) on the events table.
 // User properties use a subquery against the persons table.
-func buildWhereClauseSQL(clauses []EventWhereClause, projectID, environment string) (string, []interface{}) {
+// It also expands virtual/merged properties into their child properties.
+func buildWhereClauseSQL(db *gorm.DB, clauses []EventWhereClause, projectID, environment string) (string, []interface{}) {
 	var conditions []string
 	var args []interface{}
 
@@ -93,6 +94,23 @@ func buildWhereClauseSQL(clauses []EventWhereClause, projectID, environment stri
 			rawKey = rawKey[5:]
 		}
 		rawKey = sanitizeKey(rawKey)
+
+		// Expand virtual/merged properties into child property names
+		childKeys := []string{rawKey}
+		if db != nil && !isUserProp {
+			var vp database.LexiconEventProperty
+			if err := db.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawKey).First(&vp).Error; err == nil {
+				// It's a virtual property — get its children
+				var children []database.LexiconEventProperty
+				db.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, vp.ID).Find(&children)
+				if len(children) > 0 {
+					childKeys = make([]string, len(children))
+					for i, c := range children {
+						childKeys[i] = c.Name
+					}
+				}
+			}
+		}
 
 		if isUserProp {
 			// User properties: check against the persons table via subquery
@@ -133,37 +151,54 @@ func buildWhereClauseSQL(clauses []EventWhereClause, projectID, environment stri
 			}
 		} else {
 			// Event/default properties: check on the events table directly
-			propExpr := fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", rawKey)
+			// For merged/virtual properties, childKeys has multiple entries (e.g. os, os_version)
+			var propClauses []string
+			var propArgs []interface{}
 
-			switch wc.Operator {
-			case "is":
-				conditions = append(conditions, fmt.Sprintf("%s = ?", propExpr))
-				args = append(args, wc.Value)
-			case "is_not":
-				conditions = append(conditions, fmt.Sprintf("%s != ?", propExpr))
-				args = append(args, wc.Value)
-			case "contains":
-				conditions = append(conditions, fmt.Sprintf("positionCaseInsensitive(%s, ?) > 0", propExpr))
-				args = append(args, wc.Value)
-			case "does_not_contain":
-				conditions = append(conditions, fmt.Sprintf("positionCaseInsensitive(%s, ?) = 0", propExpr))
-				args = append(args, wc.Value)
-			case "is_set":
-				conditions = append(conditions, fmt.Sprintf("mapContains(mapUpdate(default_properties, properties), '%s')", rawKey))
-			case "is_not_set":
-				conditions = append(conditions, fmt.Sprintf("NOT mapContains(mapUpdate(default_properties, properties), '%s')", rawKey))
-			case "gt":
-				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) > toFloat64OrZero(?)", propExpr))
-				args = append(args, wc.Value)
-			case "lt":
-				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) < toFloat64OrZero(?)", propExpr))
-				args = append(args, wc.Value)
-			case "gte":
-				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) >= toFloat64OrZero(?)", propExpr))
-				args = append(args, wc.Value)
-			case "lte":
-				conditions = append(conditions, fmt.Sprintf("toFloat64OrZero(%s) <= toFloat64OrZero(?)", propExpr))
-				args = append(args, wc.Value)
+			for _, ck := range childKeys {
+				propExpr := fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", ck)
+
+				switch wc.Operator {
+				case "is":
+					propClauses = append(propClauses, fmt.Sprintf("%s = ?", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "is_not":
+					propClauses = append(propClauses, fmt.Sprintf("%s != ?", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "contains":
+					propClauses = append(propClauses, fmt.Sprintf("positionCaseInsensitive(%s, ?) > 0", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "does_not_contain":
+					propClauses = append(propClauses, fmt.Sprintf("positionCaseInsensitive(%s, ?) = 0", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "is_set":
+					propClauses = append(propClauses, fmt.Sprintf("mapContains(mapUpdate(default_properties, properties), '%s')", ck))
+				case "is_not_set":
+					propClauses = append(propClauses, fmt.Sprintf("NOT mapContains(mapUpdate(default_properties, properties), '%s')", ck))
+				case "gt":
+					propClauses = append(propClauses, fmt.Sprintf("toFloat64OrZero(%s) > toFloat64OrZero(?)", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "lt":
+					propClauses = append(propClauses, fmt.Sprintf("toFloat64OrZero(%s) < toFloat64OrZero(?)", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "gte":
+					propClauses = append(propClauses, fmt.Sprintf("toFloat64OrZero(%s) >= toFloat64OrZero(?)", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				case "lte":
+					propClauses = append(propClauses, fmt.Sprintf("toFloat64OrZero(%s) <= toFloat64OrZero(?)", propExpr))
+					propArgs = append(propArgs, wc.Value)
+				}
+			}
+
+			if len(propClauses) > 0 {
+				// For merged properties: positive ops use OR, negative ops use AND
+				isNegative := wc.Operator == "is_not" || wc.Operator == "does_not_contain" || wc.Operator == "is_not_set"
+				joinOp := " OR "
+				if isNegative {
+					joinOp = " AND "
+				}
+				conditions = append(conditions, "("+strings.Join(propClauses, joinOp)+")")
+				args = append(args, propArgs...)
 			}
 		}
 	}
@@ -398,7 +433,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 
 					// 2b. Apply where clause filters on event properties
 					if len(f.WhereFilters) > 0 {
-						wcSQL, wcArgs := buildWhereClauseSQL(f.WhereFilters, projID, environment)
+						wcSQL, wcArgs := buildWhereClauseSQL(h.DB, f.WhereFilters, projID, environment)
 						if wcSQL != "" {
 							subQuery += " AND " + wcSQL
 							subArgs = append(subArgs, wcArgs...)
