@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"sankofa/engine/internal/models"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
 // BuildWindowFunnelQuery constructs a ClickHouse SQL query using the windowFunnel function.
@@ -168,6 +170,47 @@ func buildFilterConds(filters []models.Filter) (string, []any) {
 	return strings.Join(conds, " AND "), args
 }
 
+// buildFilterCondsNamed returns a combined SQL condition string and clickhouse.Named arguments
+// specifically for sequenceMatch where ? placeholders cause conflicts.
+func buildFilterCondsNamed(filters []models.Filter, prefix string) (string, []any) {
+	var conds []string
+	var args []any
+
+	for i, f := range filters {
+		extractedVal := fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", escapeString(f.Property))
+		paramName := fmt.Sprintf("%s_f%d", prefix, i)
+
+		switch f.Operator {
+		case "eq":
+			if len(f.Values) > 0 {
+				conds = append(conds, fmt.Sprintf("%s = @%s", extractedVal, paramName))
+				args = append(args, clickhouse.Named(paramName, f.Values[0]))
+			}
+		case "neq":
+			if len(f.Values) > 0 {
+				conds = append(conds, fmt.Sprintf("%s != @%s", extractedVal, paramName))
+				args = append(args, clickhouse.Named(paramName, f.Values[0]))
+			}
+		case "in":
+			if len(f.Values) > 0 {
+				placeholders := make([]string, len(f.Values))
+				for j, v := range f.Values {
+					pName := fmt.Sprintf("%s_v%d", paramName, j)
+					placeholders[j] = "@" + pName
+					args = append(args, clickhouse.Named(pName, v))
+				}
+				conds = append(conds, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+			}
+		case "contains":
+			if len(f.Values) > 0 {
+				conds = append(conds, fmt.Sprintf("position(%s, @%s) > 0", extractedVal, paramName))
+				args = append(args, clickhouse.Named(paramName, f.Values[0]))
+			}
+		}
+	}
+	return strings.Join(conds, " AND "), args
+}
+
 // BuildSequenceMatchQuery constructs an advanced funnel query using sequenceMatch.
 func BuildSequenceMatchQuery(req models.FunnelRequest) (string, []any) {
 	var args []any
@@ -194,7 +237,7 @@ func BuildSequenceMatchQuery(req models.FunnelRequest) (string, []any) {
 		condName := fmt.Sprintf("cond_%d", i+1)
 		condExpr := fmt.Sprintf("event_name = '%s'", escapeString(step.EventName))
 		if len(step.Filters) > 0 {
-			filterStmt, filterArgs := buildFilterConds(step.Filters)
+			filterStmt, filterArgs := buildFilterCondsNamed(step.Filters, fmt.Sprintf("step%d", i))
 			if filterStmt != "" {
 				condExpr += " AND " + filterStmt
 				condArgs = append(condArgs, filterArgs...)
@@ -207,17 +250,17 @@ func BuildSequenceMatchQuery(req models.FunnelRequest) (string, []any) {
 	}
 
 	// 3. Inner WHERE
-	whereStmt := "project_id = ?"
+	whereStmt := "project_id = @project_id"
 	var whereArgs []any
-	whereArgs = append(whereArgs, req.ProjectID)
+	whereArgs = append(whereArgs, clickhouse.Named("project_id", req.ProjectID))
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
-		whereStmt += " AND timestamp >= ? AND timestamp <= ?"
-		whereArgs = append(whereArgs, req.GlobalDateRange.Start.UTC(), req.GlobalDateRange.End.UTC())
+		whereStmt += " AND timestamp >= @start_time AND timestamp <= @end_time"
+		whereArgs = append(whereArgs, clickhouse.Named("start_time", req.GlobalDateRange.Start.UTC()), clickhouse.Named("end_time", req.GlobalDateRange.End.UTC()))
 	}
 
 	if len(req.GlobalFilters) > 0 {
-		globalFilterStmt, globalFilterArgs := buildFilterConds(req.GlobalFilters)
+		globalFilterStmt, globalFilterArgs := buildFilterCondsNamed(req.GlobalFilters, "global")
 		if globalFilterStmt != "" {
 			whereStmt += " AND " + globalFilterStmt
 			whereArgs = append(whereArgs, globalFilterArgs...)

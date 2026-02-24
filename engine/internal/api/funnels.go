@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"reflect"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/models"
 
@@ -63,12 +64,17 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 
 	var results []fiber.Map
 	cols := rows.Columns()
+	colTypes := rows.ColumnTypes()
 
 	for rows.Next() {
 		values := make([]interface{}, len(cols))
 		pointers := make([]interface{}, len(cols))
 		for i := range values {
-			pointers[i] = &values[i]
+			if colTypes != nil && i < len(colTypes) {
+				pointers[i] = reflect.New(colTypes[i].ScanType()).Interface()
+			} else {
+				pointers[i] = &values[i]
+			}
 		}
 
 		if err := rows.Scan(pointers...); err != nil {
@@ -78,7 +84,8 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 
 		rowMap := fiber.Map{}
 		for i, colName := range cols {
-			rowMap[colName] = values[i]
+			val := reflect.ValueOf(pointers[i]).Elem().Interface()
+			rowMap[colName] = val
 		}
 		results = append(results, rowMap)
 	}
