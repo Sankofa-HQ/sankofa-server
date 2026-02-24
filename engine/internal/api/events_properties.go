@@ -47,49 +47,69 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 
 	environment := c.Query("environment", "live")
 	eventName := c.Query("event_name")
+
+	var query string
+	var queryArgs []interface{}
+
 	if eventName == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing event_name parameter"})
-	}
+		// "All Events" — query properties across ALL events for this project
+		query = `
+			SELECT DISTINCT key 
+			FROM (
+				SELECT arrayJoin(mapKeys(properties)) AS key
+				FROM events
+				WHERE project_id = ? AND environment = ?
+				
+				UNION ALL
+				
+				SELECT arrayJoin(mapKeys(default_properties)) AS key
+				FROM events
+				WHERE project_id = ? AND environment = ?
+			) AS combined
+			ORDER BY key
+			LIMIT 1000
+		`
+		queryArgs = []interface{}{project.ID, environment, project.ID, environment}
+	} else {
+		// Specific event — expand virtual/merged event names into constituent events
+		expandedNames := ExpandVirtualEventNames(h.DB, project.ID, []string{eventName})
+		if len(expandedNames) == 0 {
+			expandedNames = []string{eventName}
+		}
 
-	// Expand virtual/merged event names into their constituent event names
-	expandedNames := ExpandVirtualEventNames(h.DB, project.ID, []string{eventName})
-	if len(expandedNames) == 0 {
-		expandedNames = []string{eventName}
-	}
+		// Build placeholders for the IN clause
+		placeholders := make([]string, len(expandedNames))
+		queryArgs = make([]interface{}, 0, 2+len(expandedNames)*2)
+		queryArgs = append(queryArgs, project.ID, environment)
+		for i, name := range expandedNames {
+			placeholders[i] = "?"
+			queryArgs = append(queryArgs, name)
+		}
+		inClause := strings.Join(placeholders, ",")
 
-	// Build placeholders for the IN clause
-	placeholders := make([]string, len(expandedNames))
-	queryArgs := make([]interface{}, 0, 2+len(expandedNames)*2)
-	queryArgs = append(queryArgs, project.ID, environment)
-	for i, name := range expandedNames {
-		placeholders[i] = "?"
-		queryArgs = append(queryArgs, name)
-	}
-	inClause := strings.Join(placeholders, ",")
+		// Duplicate args for the UNION ALL second half
+		queryArgs = append(queryArgs, project.ID, environment)
+		for _, name := range expandedNames {
+			queryArgs = append(queryArgs, name)
+		}
 
-	// Duplicate args for the UNION ALL second half
-	queryArgs = append(queryArgs, project.ID, environment)
-	for _, name := range expandedNames {
-		queryArgs = append(queryArgs, name)
+		query = fmt.Sprintf(`
+			SELECT DISTINCT key 
+			FROM (
+				SELECT arrayJoin(mapKeys(properties)) AS key
+				FROM events
+				WHERE project_id = ? AND environment = ? AND event_name IN (%s)
+				
+				UNION ALL
+				
+				SELECT arrayJoin(mapKeys(default_properties)) AS key
+				FROM events
+				WHERE project_id = ? AND environment = ? AND event_name IN (%s)
+			) AS combined
+			ORDER BY key
+			LIMIT 1000
+		`, inClause, inClause)
 	}
-
-	// query event property keys from all constituent events
-	query := fmt.Sprintf(`
-		SELECT DISTINCT key 
-		FROM (
-			SELECT arrayJoin(mapKeys(properties)) AS key
-			FROM events
-			WHERE project_id = ? AND environment = ? AND event_name IN (%s)
-			
-			UNION ALL
-			
-			SELECT arrayJoin(mapKeys(default_properties)) AS key
-			FROM events
-			WHERE project_id = ? AND environment = ? AND event_name IN (%s)
-		) AS combined
-		ORDER BY key
-		LIMIT 1000
-	`, inClause, inClause)
 
 	rows, err := h.CH.Query(context.Background(), query, queryArgs...)
 	if err != nil {
@@ -122,7 +142,6 @@ func applyLexiconToEventProperties(db *gorm.DB, projectID string, rawKeys []stri
 		return rawKeys
 	}
 
-	// Identify unique keys, stripping out the 'prop_' prefix if it exists to query Lexicon
 	rawSet := make(map[string]bool)
 	for _, k := range rawKeys {
 		rawSet[k] = true
@@ -134,39 +153,35 @@ func applyLexiconToEventProperties(db *gorm.DB, projectID string, rawKeys []stri
 	}
 
 	hiddenMap := make(map[string]bool)
-	virtualMap := make(map[string]bool)
 	mergedTargetsMap := make(map[string]bool) // virtual IDs we need to add
 
 	for _, p := range allLexiconProps {
 		if p.Hidden {
-			// Also include 'prop_' prefixed version
 			hiddenMap[p.Name] = true
-			hiddenMap["prop_"+p.Name] = true
-		}
-		if p.IsVirtual {
-			virtualMap[p.Name] = true
-			virtualMap["prop_"+p.Name] = true
 		}
 		if p.MergedIntoID != nil && *p.MergedIntoID != "" {
-			// If a raw property was in our original list, and it's merged into a target, we need to ensure the target is in the list
-			if rawSet[p.Name] || rawSet["prop_"+p.Name] {
+			// If a raw property was in our original list, and it's merged into a target,
+			// hide the child and ensure the virtual parent is in the list
+			if rawSet[p.Name] {
 				mergedTargetsMap[*p.MergedIntoID] = true
+				hiddenMap[p.Name] = true // Hide the child that's merged into a virtual
 			}
 		}
 	}
 
-	// Resolve the virtual IDs back to their names to prepend them
+	// Resolve the virtual IDs back to their display names
 	if len(mergedTargetsMap) > 0 {
 		for _, p := range allLexiconProps {
 			if mergedTargetsMap[p.ID] {
-				rawSet["prop_"+p.Name] = true // Add the virtual one
+				// Keep the underlying machine name for querying, the frontend Lexicon context
+				// handles displaying the human-readable 'DisplayName'.
+				rawSet[p.Name] = true
 			}
 		}
 	}
 
 	var finalKeys []string
 	for k := range rawSet {
-		// Only include it if it's not hidden (which includes being merged as a child)
 		if !hiddenMap[k] {
 			finalKeys = append(finalKeys, k)
 		}
