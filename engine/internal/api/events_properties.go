@@ -47,11 +47,19 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 
 	environment := c.Query("environment", "live")
 	eventName := c.Query("event_name")
+	eventNamesStr := c.Query("event_names")
+
+	var targetEvents []string
+	if eventNamesStr != "" {
+		targetEvents = strings.Split(eventNamesStr, ",")
+	} else if eventName != "" {
+		targetEvents = []string{eventName}
+	}
 
 	var query string
 	var queryArgs []interface{}
 
-	if eventName == "" {
+	if len(targetEvents) == 0 {
 		// "All Events" — query properties across ALL events for this project
 		// Tag default properties with 'default:' prefix so frontend can distinguish them
 		query = `
@@ -72,10 +80,10 @@ func (h *EventsHandler) GetEventProperties(c *fiber.Ctx) error {
 		`
 		queryArgs = []interface{}{project.ID, environment, project.ID, environment}
 	} else {
-		// Specific event — expand virtual/merged event names into constituent events
-		expandedNames := ExpandVirtualEventNames(h.DB, project.ID, []string{eventName})
+		// Specific event(s) — expand virtual/merged event names into constituent events
+		expandedNames := ExpandVirtualEventNames(h.DB, project.ID, targetEvents)
 		if len(expandedNames) == 0 {
-			expandedNames = []string{eventName}
+			expandedNames = targetEvents
 		}
 
 		// Build placeholders for the IN clause
