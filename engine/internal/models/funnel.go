@@ -5,7 +5,9 @@ import "time"
 type FunnelRequest struct {
 	ProjectID       string       `json:"project_id"`
 	GlobalDateRange DateRange    `json:"global_date_range"`
-	OrderMode       string       `json:"order_mode"` // "loose" or "strict"
+	WindowValue     int          `json:"window_value"`
+	WindowUnit      string       `json:"window_unit"` // "seconds", "minutes", "hours", "days", "weeks", "months", "sessions"
+	OrderMode       string       `json:"order_mode"`  // "loose" or "strict"
 	HoldConstants   []string     `json:"hold_constants"`
 	GlobalFilters   []Filter     `json:"global_filters"`
 	Breakdowns      []string     `json:"breakdowns"`
@@ -33,9 +35,6 @@ type FunnelStep struct {
 }
 
 func RequiresSequenceMatch(req FunnelRequest) bool {
-	if req.OrderMode == "strict" {
-		return true
-	}
 	for _, step := range req.Steps {
 		if step.Type == "exclusion" || step.TimeToNext != nil {
 			return true

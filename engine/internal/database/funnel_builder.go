@@ -55,7 +55,12 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		conditions = append(conditions, cond)
 	}
 
-	windowFunnelCall := fmt.Sprintf("windowFunnel(%d)(\n                timestamp,\n                %s\n            )", defaultWindowSeconds, strings.Join(conditions, ",\n                "))
+	modeArgs := ""
+	if req.OrderMode == "strict" {
+		modeArgs = ", 'strict_order'"
+	}
+
+	windowFunnelCall := fmt.Sprintf("windowFunnel(%d%s)(\n                timestamp,\n                %s\n            )", defaultWindowSeconds, modeArgs, strings.Join(conditions, ",\n                "))
 
 	// 3. Build WHERE clause
 	// Start with environment-agnostic properties first
@@ -248,7 +253,7 @@ func buildFilterCondsNamed(filters []models.Filter, prefix string) (string, []an
 }
 
 // BuildSequenceMatchQuery constructs an advanced funnel query using sequenceMatch.
-func BuildSequenceMatchQuery(req models.FunnelRequest) (string, []any) {
+func BuildSequenceMatchQuery(req models.FunnelRequest, windowSeconds int) (string, []any) {
 	var args []any
 
 	extractProp := func(key string) string {
@@ -343,7 +348,7 @@ func BuildSequenceMatchQuery(req models.FunnelRequest) (string, []any) {
 
 	var levelChecks []string
 	for targetMax := 1; targetMax <= eventCount; targetMax++ {
-		pattern := buildSequencePattern(req.Steps, targetMax, req.OrderMode)
+		pattern := buildSequencePattern(req.Steps, targetMax, req.OrderMode, windowSeconds)
 		levelChecks = append(levelChecks, fmt.Sprintf("sequenceMatch('%s')(timestamp, %s) AS level_%d", pattern, condRefsStr, targetMax))
 	}
 
@@ -513,7 +518,7 @@ ORDER BY %s`,
 }
 
 // buildSequencePattern generates the Regex-like patterns for ClickHouse sequenceMatch
-func buildSequencePattern(steps []models.FunnelStep, targetEventIndex int, orderMode string) string {
+func buildSequencePattern(steps []models.FunnelStep, targetEventIndex int, orderMode string, globalWindow int) string {
 	var pattern string
 	eventCount := 0
 
@@ -539,6 +544,8 @@ func buildSequencePattern(steps []models.FunnelStep, targetEventIndex int, order
 
 				if step.TimeToNext != nil && *step.TimeToNext > 0 {
 					pattern += fmt.Sprintf("(?t<=%d)", *step.TimeToNext)
+				} else if globalWindow > 0 {
+					pattern += fmt.Sprintf("(?t<=%d)", globalWindow)
 				}
 				pattern += condRef
 			}

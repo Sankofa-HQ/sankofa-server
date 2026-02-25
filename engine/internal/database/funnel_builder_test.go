@@ -39,7 +39,7 @@ func TestBuildSequenceMatchQuery_Simple(t *testing.T) {
 		},
 	}
 
-	query, args := BuildSequenceMatchQuery(req)
+	query, args := BuildSequenceMatchQuery(req, 604800)
 
 	if !strings.Contains(query, "sequenceMatch('(?1)')") {
 		t.Errorf("Expected level 1 sequenceMatch")
@@ -65,7 +65,7 @@ func TestBuildSequenceMatchQuery_Exclusion(t *testing.T) {
 		},
 	}
 
-	query, _ := BuildSequenceMatchQuery(req)
+	query, _ := BuildSequenceMatchQuery(req, 604800)
 
 	if !strings.Contains(query, "sequenceMatch('(?1).*~(?2).*(?3)')") {
 		t.Errorf("Expected sequenceMatch to generate exclusion pattern: (?1).*~(?2).*(?3). Got: %s", query)
@@ -83,7 +83,7 @@ func TestBuildSequenceMatchQuery_TimeToNext(t *testing.T) {
 		},
 	}
 
-	query, _ := BuildSequenceMatchQuery(req)
+	query, _ := BuildSequenceMatchQuery(req, 604800)
 
 	if !strings.Contains(query, "sequenceMatch('(?1).*(?t<=600)(?2)')") {
 		t.Errorf("Expected timeout syntax (?t<=600)")

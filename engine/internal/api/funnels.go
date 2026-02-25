@@ -56,12 +56,35 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	var query string
 	var args []any
 
-	if models.RequiresSequenceMatch(req) {
-		query, args = database.BuildSequenceMatchQuery(req)
+	var windowSeconds int
+	if req.WindowValue > 0 && req.WindowUnit != "" {
+		switch req.WindowUnit {
+		case "seconds":
+			windowSeconds = req.WindowValue
+		case "minutes":
+			windowSeconds = req.WindowValue * 60
+		case "hours":
+			windowSeconds = req.WindowValue * 3600
+		case "days":
+			windowSeconds = req.WindowValue * 86400
+		case "weeks":
+			windowSeconds = req.WindowValue * 604800
+		case "months":
+			windowSeconds = req.WindowValue * 2592000
+		case "sessions":
+			// Assuming a session inactivity break is typically 30m, 1 session interval could map equivalently or just fallback.
+			windowSeconds = req.WindowValue * 1800
+		default:
+			windowSeconds = req.WindowValue * 86400
+		}
 	} else {
-		// Give a default funnel window if not standardly specified
-		defaultWindow := 604800 // 7 days in seconds, can be passed or extracted
-		query, args = database.BuildWindowFunnelQuery(req, defaultWindow)
+		windowSeconds = 604800 // Default to 7 days if unset
+	}
+
+	if models.RequiresSequenceMatch(req) {
+		query, args = database.BuildSequenceMatchQuery(req, windowSeconds)
+	} else {
+		query, args = database.BuildWindowFunnelQuery(req, windowSeconds)
 	}
 
 	ctx := c.Context()
