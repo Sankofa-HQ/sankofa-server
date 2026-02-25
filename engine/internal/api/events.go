@@ -1045,7 +1045,7 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 		var children []database.LexiconEventProperty
 		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
 		for _, child := range children {
-			expanded = append(expanded, child.Name)
+			expanded = append(expanded, "prop_"+child.Name)
 		}
 	} else {
 		var children []database.LexiconProfileProperty
