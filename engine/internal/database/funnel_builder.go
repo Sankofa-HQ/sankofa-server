@@ -55,9 +55,9 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		conditions = append(conditions, cond)
 	}
 
-	modeArgs := ""
+	modeArgs := ", 'strict_deduplication'"
 	if req.OrderMode == "strict" {
-		modeArgs = ", 'strict_order'"
+		modeArgs = ", 'strict_order', 'strict_deduplication'"
 	}
 
 	windowFunnelCall := fmt.Sprintf("windowFunnel(%d%s)(\n                timestamp,\n                %s\n            )", defaultWindowSeconds, modeArgs, strings.Join(conditions, ",\n                "))

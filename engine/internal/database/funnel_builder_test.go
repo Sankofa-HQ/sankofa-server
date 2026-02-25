@@ -18,8 +18,8 @@ func TestBuildWindowFunnelQuery_Basic(t *testing.T) {
 
 	query, args := BuildWindowFunnelQuery(req, 604800)
 
-	if !strings.Contains(query, "windowFunnel(604800)") {
-		t.Errorf("Expected query to contain windowFunnel(604800)")
+	if !strings.Contains(query, "windowFunnel(604800, 'strict_deduplication')") {
+		t.Errorf("Expected query to contain windowFunnel with strict_deduplication, got: %s", query)
 	}
 	if !strings.Contains(query, "event_name = 'sign up'") {
 		t.Errorf("Expected query to contain step 1")

@@ -87,6 +87,11 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 		query, args = database.BuildWindowFunnelQuery(req, windowSeconds)
 	}
 
+	fmt.Println("=== Funnel Query ===")
+	fmt.Println(query)
+	fmt.Println("=== Funnel Args ===", args)
+	fmt.Println("=== Window Seconds ===", windowSeconds)
+
 	ctx := c.Context()
 	rows, err := h.chConn.Query(ctx, query, args...)
 	if err != nil {
