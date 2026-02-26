@@ -9,6 +9,25 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
+// BuildBreakdownSQL generates the SQL expression for a breakdown column.
+// If only one key is provided it delegates to BuildPropertyExtractionSQL.
+// If multiple keys are provided (merged/virtual property) it uses COALESCE so the
+// first non-empty child value is used as the segment label.
+func BuildBreakdownSQL(expandedKeys []string) string {
+	if len(expandedKeys) == 0 {
+		return "''"
+	}
+	if len(expandedKeys) == 1 {
+		return BuildPropertyExtractionSQL(expandedKeys[0])
+	}
+	// multiple children — COALESCE over all of them, picking the first non-empty
+	parts := make([]string, 0, len(expandedKeys))
+	for _, k := range expandedKeys {
+		parts = append(parts, "nullIf("+BuildPropertyExtractionSQL(k)+", '')")
+	}
+	return "coalesce(" + strings.Join(parts, ", ") + ", '')"
+}
+
 // BuildPropertyExtractionSQL standardizes how properties are queried, handling frontend prefixes.
 func BuildPropertyExtractionSQL(key string) string {
 	cleanKey := key
@@ -31,12 +50,18 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		return BuildPropertyExtractionSQL(key)
 	}
 
-	// 1. Build breakdowns
+	// 1. Build breakdowns — use ExpandedBreakdowns for merged/virtual properties
 	var breakdownSelects []string
 	var breakdownAliases []string
 	for i, bp := range req.Breakdowns {
 		alias := fmt.Sprintf("breakdown_%d", i)
-		breakdownSelects = append(breakdownSelects, fmt.Sprintf("%s AS %s", extractProp(bp), alias))
+		var expandedKeys []string
+		if i < len(req.ExpandedBreakdowns) && len(req.ExpandedBreakdowns[i]) > 0 {
+			expandedKeys = req.ExpandedBreakdowns[i]
+		} else {
+			expandedKeys = []string{bp}
+		}
+		breakdownSelects = append(breakdownSelects, fmt.Sprintf("%s AS %s", BuildBreakdownSQL(expandedKeys), alias))
 		breakdownAliases = append(breakdownAliases, alias)
 	}
 
@@ -303,12 +328,18 @@ func BuildSequenceMatchQuery(req models.FunnelRequest, windowSeconds int) (strin
 		return BuildPropertyExtractionSQL(key)
 	}
 
-	// 1. Breakdowns
+	// 1. Breakdowns — use ExpandedBreakdowns for merged/virtual properties
 	var breakdownSelects []string
 	var breakdownAliases []string
 	for i, bp := range req.Breakdowns {
 		alias := fmt.Sprintf("breakdown_%d", i)
-		breakdownSelects = append(breakdownSelects, fmt.Sprintf("%s AS %s", extractProp(bp), alias))
+		var expandedKeys []string
+		if i < len(req.ExpandedBreakdowns) && len(req.ExpandedBreakdowns[i]) > 0 {
+			expandedKeys = req.ExpandedBreakdowns[i]
+		} else {
+			expandedKeys = []string{bp}
+		}
+		breakdownSelects = append(breakdownSelects, fmt.Sprintf("%s AS %s", BuildBreakdownSQL(expandedKeys), alias))
 		breakdownAliases = append(breakdownAliases, alias)
 	}
 

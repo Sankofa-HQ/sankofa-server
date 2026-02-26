@@ -1079,18 +1079,34 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 
 	var virtualID string
 	var found bool
+	var foundInEventProps bool // track which table we found it in
 
 	if isEventProp {
+		// Explicitly prefixed prop_ — search event properties only
 		var vp database.LexiconEventProperty
 		if err := h.DB.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawName).First(&vp).Error; err == nil {
 			virtualID = vp.ID
 			found = true
+			foundInEventProps = true
 		}
 	} else {
-		var vp database.LexiconProfileProperty
-		if err := h.DB.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawName).First(&vp).Error; err == nil {
-			virtualID = vp.ID
+		// No prefix (e.g. merged_prop_..., or a raw property name).
+		// Try LexiconEventProperty first — merged event properties like merged_prop_... live here.
+		var vep database.LexiconEventProperty
+		if err := h.DB.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawName).First(&vep).Error; err == nil {
+			virtualID = vep.ID
 			found = true
+			foundInEventProps = true
+		}
+
+		// Fall back to LexiconProfileProperty (user/profile merged properties)
+		if !found {
+			var vpp database.LexiconProfileProperty
+			if err := h.DB.Select("id").Where("project_id = ? AND is_virtual = ? AND name = ?", projectID, true, rawName).First(&vpp).Error; err == nil {
+				virtualID = vpp.ID
+				found = true
+				foundInEventProps = false
+			}
 		}
 	}
 
@@ -1102,7 +1118,8 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 	knownDefaults := h.getKnownDefaultProperties(projectID)
 
 	var expanded []string
-	if isEventProp {
+	if isEventProp || foundInEventProps {
+		// Resolve children from LexiconEventProperty
 		var children []database.LexiconEventProperty
 		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
 		for _, child := range children {
@@ -1113,6 +1130,7 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 			}
 		}
 	} else {
+		// Resolve children from LexiconProfileProperty
 		var children []database.LexiconProfileProperty
 		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
 		for _, child := range children {

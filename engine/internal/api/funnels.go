@@ -75,6 +75,17 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 		}
 	}
 
+	// Expand virtual/merged property names in breakdowns
+	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
+	for i, bd := range req.Breakdowns {
+		expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, bd)
+		if len(expanded) == 0 {
+			expanded = []string{bd} // fallback to raw key
+		}
+		req.ExpandedBreakdowns[i] = expanded
+		fmt.Printf("  Breakdown[%d]: %q → expanded=%v\n", i, bd, expanded)
+	}
+
 	var query string
 	var args []any
 
