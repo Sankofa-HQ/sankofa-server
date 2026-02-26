@@ -545,7 +545,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 			organization_id,
 			environment
 		FROM events
-	` + whereClause + fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d OFFSET %d", limit, offset)
+	` + whereClause + fmt.Sprintf(" ORDER BY timestamp DESC LIMIT 1 BY distinct_id, event_name, timestamp LIMIT %d OFFSET %d", limit, offset)
 
 	log.Printf("Events Query: org=%s proj=%s env=%s limit=%d offset=%d", orgID, projID, environment, limit, offset)
 
