@@ -144,6 +144,7 @@ func main() {
 		&database.LexiconEventProperty{},
 		&database.LexiconProfileProperty{},
 		&database.Cohort{},
+		&database.SavedFunnel{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sankofa/engine/internal/database"
@@ -26,6 +27,11 @@ func (h *FunnelsHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	funnels := router.Group("/projects/:project_id/funnels")
 	funnels.Use(authMiddleware)
 	funnels.Post("/", h.CalculateFunnel)
+	funnels.Post("/saved", h.CreateSavedFunnel)
+	funnels.Get("/saved", h.ListSavedFunnels)
+	funnels.Get("/saved/:id", h.GetSavedFunnel)
+	funnels.Put("/saved/:id", h.UpdateSavedFunnel)
+	funnels.Delete("/saved/:id", h.DeleteSavedFunnel)
 }
 
 func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
@@ -164,4 +170,192 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(results)
+}
+
+type SaveFunnelRequest struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	QueryAST    interface{} `json:"query_ast"` // Accepts any JSON object
+	IsPinned    bool        `json:"is_pinned"`
+}
+
+func (h *FunnelsHandler) CreateSavedFunnel(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID := c.Params("project_id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Project ID is required"})
+	}
+
+	var project database.Project
+	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+	if !checkProjectAccess(h.db, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	var req SaveFunnelRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Name is required"})
+	}
+
+	astBytes, err := json.Marshal(req.QueryAST)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid Query AST"})
+	}
+
+	funnel := database.SavedFunnel{
+		ProjectID:   projectID,
+		Name:        req.Name,
+		Description: req.Description,
+		QueryAST:    astBytes,
+		IsPinned:    req.IsPinned,
+		CreatedByID: userID,
+	}
+
+	if err := h.db.Create(&funnel).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to save funnel"})
+	}
+
+	return c.JSON(funnel)
+}
+
+func (h *FunnelsHandler) ListSavedFunnels(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID := c.Params("project_id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Project ID is required"})
+	}
+
+	var project database.Project
+	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+	if !checkProjectAccess(h.db, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	var funnels []database.SavedFunnel
+	if err := h.db.Where("project_id = ?", projectID).Preload("CreatedBy").Order("created_at DESC").Find(&funnels).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch saved funnels"})
+	}
+
+	return c.JSON(funnels)
+}
+
+func (h *FunnelsHandler) GetSavedFunnel(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID := c.Params("project_id")
+	funnelID := c.Params("id")
+
+	var project database.Project
+	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+	if !checkProjectAccess(h.db, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	var funnel database.SavedFunnel
+	if err := h.db.Where("id = ? AND project_id = ?", funnelID, projectID).First(&funnel).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Saved funnel not found"})
+	}
+
+	return c.JSON(funnel)
+}
+
+func (h *FunnelsHandler) UpdateSavedFunnel(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID := c.Params("project_id")
+	funnelID := c.Params("id")
+
+	var project database.Project
+	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+	if !checkProjectAccess(h.db, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	var funnel database.SavedFunnel
+	if err := h.db.Where("id = ? AND project_id = ?", funnelID, projectID).First(&funnel).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Saved funnel not found"})
+	}
+
+	var req struct {
+		Name        *string      `json:"name"`
+		Description *string      `json:"description"`
+		QueryAST    *interface{} `json:"query_ast"`
+		IsPinned    *bool        `json:"is_pinned"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.Name != nil {
+		funnel.Name = *req.Name
+	}
+	if req.Description != nil {
+		funnel.Description = *req.Description
+	}
+	if req.IsPinned != nil {
+		funnel.IsPinned = *req.IsPinned
+	}
+	if req.QueryAST != nil {
+		astBytes, err := json.Marshal(*req.QueryAST)
+		if err == nil {
+			funnel.QueryAST = astBytes
+		}
+	}
+
+	if err := h.db.Save(&funnel).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update saved funnel"})
+	}
+
+	return c.JSON(funnel)
+}
+
+func (h *FunnelsHandler) DeleteSavedFunnel(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	projectID := c.Params("project_id")
+	funnelID := c.Params("id")
+
+	var project database.Project
+	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+	if !checkProjectAccess(h.db, &project, userID) {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	if err := h.db.Where("id = ? AND project_id = ?", funnelID, projectID).Delete(&database.SavedFunnel{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete saved funnel"})
+	}
+
+	return c.SendStatus(204)
 }
