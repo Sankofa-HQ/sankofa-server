@@ -9,13 +9,26 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
+// BuildPropertyExtractionSQL standardizes how properties are queried, handling frontend prefixes.
+func BuildPropertyExtractionSQL(key string) string {
+	cleanKey := key
+	if strings.HasPrefix(key, "default_") {
+		cleanKey = key[8:]
+		return fmt.Sprintf("default_properties['%s']", escapeString(cleanKey))
+	}
+	if strings.HasPrefix(key, "prop_") {
+		cleanKey = key[5:]
+	}
+	return fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", escapeString(cleanKey))
+}
+
 // BuildWindowFunnelQuery constructs a ClickHouse SQL query using the windowFunnel function.
 func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) (string, []any) {
 	var args []any
 
 	// Helper to extract properties based on existing conventions (mapUpdate for defaults fallback)
 	extractProp := func(key string) string {
-		return fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", escapeString(key))
+		return BuildPropertyExtractionSQL(key)
 	}
 
 	// 1. Build breakdowns
@@ -175,37 +188,53 @@ ORDER BY %s`,
 }
 
 // buildFilterConds returns a combined SQL condition string and arguments for the given filters.
+// If a filter has ExpandedProperties set, it generates an OR across all expanded keys.
 func buildFilterConds(filters []models.Filter) (string, []any) {
 	var conds []string
 	var args []any
 	for _, f := range filters {
-		extractedVal := fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", escapeString(f.Property))
+		// Determine which property keys to query — either expanded (for virtual/merged) or just the one
+		propKeys := f.ExpandedProperties
+		if len(propKeys) == 0 {
+			propKeys = []string{f.Property}
+		}
 
-		switch f.Operator {
-		case "eq":
-			if len(f.Values) > 0 {
-				conds = append(conds, fmt.Sprintf("%s = ?", extractedVal))
-				args = append(args, f.Values[0])
-			}
-		case "neq":
-			if len(f.Values) > 0 {
-				conds = append(conds, fmt.Sprintf("%s != ?", extractedVal))
-				args = append(args, f.Values[0])
-			}
-		case "in":
-			if len(f.Values) > 0 {
-				placeholders := make([]string, len(f.Values))
-				for i, v := range f.Values {
-					placeholders[i] = "?"
-					args = append(args, v)
+		var orParts []string
+		for _, pk := range propKeys {
+			extractedVal := BuildPropertyExtractionSQL(pk)
+
+			switch f.Operator {
+			case "eq":
+				if len(f.Values) > 0 {
+					orParts = append(orParts, fmt.Sprintf("%s = ?", extractedVal))
+					args = append(args, f.Values[0])
 				}
-				conds = append(conds, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+			case "neq":
+				if len(f.Values) > 0 {
+					orParts = append(orParts, fmt.Sprintf("%s != ?", extractedVal))
+					args = append(args, f.Values[0])
+				}
+			case "in":
+				if len(f.Values) > 0 {
+					placeholders := make([]string, len(f.Values))
+					for i, v := range f.Values {
+						placeholders[i] = "?"
+						args = append(args, v)
+					}
+					orParts = append(orParts, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+				}
+			case "contains":
+				if len(f.Values) > 0 {
+					orParts = append(orParts, fmt.Sprintf("position(%s, ?) > 0", extractedVal))
+					args = append(args, f.Values[0])
+				}
 			}
-		case "contains":
-			if len(f.Values) > 0 {
-				conds = append(conds, fmt.Sprintf("position(%s, ?) > 0", extractedVal))
-				args = append(args, f.Values[0])
-			}
+		}
+
+		if len(orParts) == 1 {
+			conds = append(conds, orParts[0])
+		} else if len(orParts) > 1 {
+			conds = append(conds, "("+strings.Join(orParts, " OR ")+")")
 		}
 	}
 	return strings.Join(conds, " AND "), args
@@ -218,35 +247,49 @@ func buildFilterCondsNamed(filters []models.Filter, prefix string) (string, []an
 	var args []any
 
 	for i, f := range filters {
-		extractedVal := fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", escapeString(f.Property))
-		paramName := fmt.Sprintf("%s_f%d", prefix, i)
+		propKeys := f.ExpandedProperties
+		if len(propKeys) == 0 {
+			propKeys = []string{f.Property}
+		}
 
-		switch f.Operator {
-		case "eq":
-			if len(f.Values) > 0 {
-				conds = append(conds, fmt.Sprintf("%s = @%s", extractedVal, paramName))
-				args = append(args, clickhouse.Named(paramName, f.Values[0]))
-			}
-		case "neq":
-			if len(f.Values) > 0 {
-				conds = append(conds, fmt.Sprintf("%s != @%s", extractedVal, paramName))
-				args = append(args, clickhouse.Named(paramName, f.Values[0]))
-			}
-		case "in":
-			if len(f.Values) > 0 {
-				placeholders := make([]string, len(f.Values))
-				for j, v := range f.Values {
-					pName := fmt.Sprintf("%s_v%d", paramName, j)
-					placeholders[j] = "@" + pName
-					args = append(args, clickhouse.Named(pName, v))
+		var orParts []string
+		for k, pk := range propKeys {
+			extractedVal := BuildPropertyExtractionSQL(pk)
+			paramName := fmt.Sprintf("%s_f%d_k%d", prefix, i, k)
+
+			switch f.Operator {
+			case "eq":
+				if len(f.Values) > 0 {
+					orParts = append(orParts, fmt.Sprintf("%s = @%s", extractedVal, paramName))
+					args = append(args, clickhouse.Named(paramName, f.Values[0]))
 				}
-				conds = append(conds, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+			case "neq":
+				if len(f.Values) > 0 {
+					orParts = append(orParts, fmt.Sprintf("%s != @%s", extractedVal, paramName))
+					args = append(args, clickhouse.Named(paramName, f.Values[0]))
+				}
+			case "in":
+				if len(f.Values) > 0 {
+					placeholders := make([]string, len(f.Values))
+					for j, v := range f.Values {
+						pName := fmt.Sprintf("%s_v%d", paramName, j)
+						placeholders[j] = "@" + pName
+						args = append(args, clickhouse.Named(pName, v))
+					}
+					orParts = append(orParts, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+				}
+			case "contains":
+				if len(f.Values) > 0 {
+					orParts = append(orParts, fmt.Sprintf("position(%s, @%s) > 0", extractedVal, paramName))
+					args = append(args, clickhouse.Named(paramName, f.Values[0]))
+				}
 			}
-		case "contains":
-			if len(f.Values) > 0 {
-				conds = append(conds, fmt.Sprintf("position(%s, @%s) > 0", extractedVal, paramName))
-				args = append(args, clickhouse.Named(paramName, f.Values[0]))
-			}
+		}
+
+		if len(orParts) == 1 {
+			conds = append(conds, orParts[0])
+		} else if len(orParts) > 1 {
+			conds = append(conds, "("+strings.Join(orParts, " OR ")+")")
 		}
 	}
 	return strings.Join(conds, " AND "), args
@@ -257,7 +300,7 @@ func BuildSequenceMatchQuery(req models.FunnelRequest, windowSeconds int) (strin
 	var args []any
 
 	extractProp := func(key string) string {
-		return fmt.Sprintf("mapUpdate(default_properties, properties)['%s']", escapeString(key))
+		return BuildPropertyExtractionSQL(key)
 	}
 
 	// 1. Breakdowns

@@ -20,9 +20,10 @@ type DateRange struct {
 }
 
 type Filter struct {
-	Property string   `json:"property"`
-	Operator string   `json:"operator"` // "eq", "neq", "in", "contains"
-	Values   []string `json:"values"`
+	Property           string   `json:"property"`
+	Operator           string   `json:"operator"` // "eq", "neq", "in", "contains"
+	Values             []string `json:"values"`
+	ExpandedProperties []string `json:"-"` // Internal: set by pre-processing for virtual/merged properties
 }
 
 type FunnelStep struct {

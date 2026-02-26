@@ -12,12 +12,13 @@ import (
 )
 
 type FunnelsHandler struct {
-	db     *gorm.DB
-	chConn driver.Conn
+	db            *gorm.DB
+	chConn        driver.Conn
+	eventsHandler *EventsHandler
 }
 
-func NewFunnelsHandler(db *gorm.DB, chConn driver.Conn) *FunnelsHandler {
-	return &FunnelsHandler{db: db, chConn: chConn}
+func NewFunnelsHandler(db *gorm.DB, chConn driver.Conn, eventsHandler *EventsHandler) *FunnelsHandler {
+	return &FunnelsHandler{db: db, chConn: chConn, eventsHandler: eventsHandler}
 }
 
 func (h *FunnelsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
@@ -49,6 +50,27 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 				req.Steps[i].ExpandedEvents = expanded
 			} else {
 				req.Steps[i].ExpandedEvents = []string{step.EventName}
+			}
+		}
+	}
+
+	// Expand virtual/merged property names in global filters
+	fmt.Printf("=== Funnel GlobalFilters (%d) ===\n", len(req.GlobalFilters))
+	for i, f := range req.GlobalFilters {
+		fmt.Printf("  Filter[%d]: property=%q operator=%q values=%v\n", i, f.Property, f.Operator, f.Values)
+		expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, f.Property)
+		fmt.Printf("  Filter[%d]: expanded=%v\n", i, expanded)
+		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+			req.GlobalFilters[i].ExpandedProperties = expanded
+		}
+	}
+
+	// Expand virtual/merged property names in per-step filters
+	for si, step := range req.Steps {
+		for fi, f := range step.Filters {
+			expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, f.Property)
+			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+				req.Steps[si].Filters[fi].ExpandedProperties = expanded
 			}
 		}
 	}

@@ -204,11 +204,11 @@ func main() {
 	// HANDLERS
 	authHandler := api.NewAuthHandler(db)
 	projectHandler := api.NewProjectHandler(db, chConn)
-	orgHandler := api.NewOrganizationHandler(db, chConn) // New
-	eventsHandler := api.NewEventsHandler(db, chConn)    // Events
-	peopleHandler := api.NewPeopleHandler(db, chConn)    // People
-	lexiconHandler := api.NewLexiconHandler(db, chConn)  // Lexicon
-	funnelsHandler := api.NewFunnelsHandler(db, chConn)  // Funnels
+	orgHandler := api.NewOrganizationHandler(db, chConn)               // New
+	eventsHandler := api.NewEventsHandler(db, chConn)                  // Events
+	peopleHandler := api.NewPeopleHandler(db, chConn)                  // People
+	lexiconHandler := api.NewLexiconHandler(db, chConn)                // Lexicon
+	funnelsHandler := api.NewFunnelsHandler(db, chConn, eventsHandler) // Funnels
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
