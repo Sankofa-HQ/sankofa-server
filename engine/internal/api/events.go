@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sankofa/engine/internal/database"
@@ -17,8 +18,10 @@ import (
 )
 
 type EventsHandler struct {
-	DB *gorm.DB
-	CH driver.Conn
+	DB               *gorm.DB
+	CH               driver.Conn
+	defaultPropsMap  sync.Map
+	defaultPropsTime sync.Map
 }
 
 func NewEventsHandler(db *gorm.DB, ch driver.Conn) *EventsHandler {
@@ -1001,6 +1004,61 @@ func (h *EventsHandler) getVirtualEventMapping(projectID string) map[string]stri
 	return mapping
 }
 
+// getKnownDefaultProperties fetches unique keys from the default_properties map for a project.
+// It caches the result for 15 minutes to avoid hitting ClickHouse constantly.
+func (h *EventsHandler) getKnownDefaultProperties(projectID string) map[string]bool {
+	if val, ok := h.defaultPropsTime.Load(projectID); ok {
+		if time.Since(val.(time.Time)) < 15*time.Minute {
+			if propsMap, ok := h.defaultPropsMap.Load(projectID); ok {
+				return propsMap.(map[string]bool)
+			}
+		}
+	}
+
+	query := `
+		SELECT DISTINCT arrayJoin(mapKeys(default_properties)) as key
+		FROM (
+			SELECT default_properties
+			FROM events
+			WHERE project_id = ?
+			ORDER BY timestamp DESC
+			LIMIT 10000
+		)
+	`
+	rows, err := h.CH.Query(context.Background(), query, projectID)
+
+	defaultProps := make(map[string]bool)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err == nil {
+				defaultProps[key] = true
+			}
+		}
+	}
+
+	// Always fallback to some critical defaults just in case the query failed or table is completely empty
+	criticalDefaults := []string{
+		"browser", "browser_version", "os", "os_version",
+		"device_type", "device_model", "device_manufacturer",
+		"screen_resolution", "screen_width", "screen_height",
+		"lib", "lib_version", "referrer", "referring_domain",
+		"current_url", "host", "pathname", "search",
+		"city", "region", "country", "continent",
+		"timezone", "locale", "app_version", "app_build",
+		"build_number", "ip", "user_agent",
+	}
+	for _, k := range criticalDefaults {
+		defaultProps[k] = true
+	}
+
+	h.defaultPropsMap.Store(projectID, defaultProps)
+	h.defaultPropsTime.Store(projectID, time.Now())
+
+	return defaultProps
+}
+
 // expandVirtualPropertyNames checks if the given property name (which may be prefixed with "prop_")
 // is a virtual property in Lexicon, and if so, returns all its underlying child property names.
 func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName string) []string {
@@ -1040,18 +1098,8 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 		return []string{propName}
 	}
 
-	// Known default properties that ClickHouse stores in default_properties map
-	knownDefaults := map[string]bool{
-		"browser": true, "browser_version": true, "os": true, "os_version": true,
-		"device_type": true, "device_model": true, "device_manufacturer": true,
-		"screen_resolution": true, "screen_width": true, "screen_height": true,
-		"lib": true, "lib_version": true, "referrer": true, "referring_domain": true,
-		"current_url": true, "host": true, "pathname": true, "search": true,
-		"utm_source": true, "utm_medium": true, "utm_campaign": true, "utm_term": true, "utm_content": true,
-		"city": true, "region": true, "country": true, "continent": true,
-		"timezone": true, "locale": true, "app_version": true, "app_build": true,
-		"build_number": true, "ip": true, "user_agent": true,
-	}
+	// Known default properties fetched dynamically from ClickHouse
+	knownDefaults := h.getKnownDefaultProperties(projectID)
 
 	var expanded []string
 	if isEventProp {
