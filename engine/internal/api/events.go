@@ -585,7 +585,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 	// Execute Count Query
 	var totalCount uint64
-	countQuery := "SELECT count() FROM events " + whereClause
+	countQuery := "SELECT count() FROM (SELECT distinct_id, event_name, timestamp FROM events " + whereClause + " LIMIT 1 BY distinct_id, event_name, timestamp)"
 
 	if err := h.CH.QueryRow(context.Background(), countQuery, queryArgs...).Scan(&totalCount); err != nil {
 		log.Println("Count query error:", err)
