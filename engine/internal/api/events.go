@@ -1040,12 +1040,29 @@ func (h *EventsHandler) expandVirtualPropertyNames(projectID string, propName st
 		return []string{propName}
 	}
 
+	// Known default properties that ClickHouse stores in default_properties map
+	knownDefaults := map[string]bool{
+		"browser": true, "browser_version": true, "os": true, "os_version": true,
+		"device_type": true, "device_model": true, "device_manufacturer": true,
+		"screen_resolution": true, "screen_width": true, "screen_height": true,
+		"lib": true, "lib_version": true, "referrer": true, "referring_domain": true,
+		"current_url": true, "host": true, "pathname": true, "search": true,
+		"utm_source": true, "utm_medium": true, "utm_campaign": true, "utm_term": true, "utm_content": true,
+		"city": true, "region": true, "country": true, "continent": true,
+		"timezone": true, "locale": true, "app_version": true, "app_build": true,
+		"build_number": true, "ip": true, "user_agent": true,
+	}
+
 	var expanded []string
 	if isEventProp {
 		var children []database.LexiconEventProperty
 		h.DB.Select("name").Where("project_id = ? AND merged_into_id = ?", projectID, virtualID).Find(&children)
 		for _, child := range children {
-			expanded = append(expanded, "prop_"+child.Name)
+			if knownDefaults[child.Name] {
+				expanded = append(expanded, "default_"+child.Name)
+			} else {
+				expanded = append(expanded, "prop_"+child.Name)
+			}
 		}
 	} else {
 		var children []database.LexiconProfileProperty
