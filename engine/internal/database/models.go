@@ -1,6 +1,7 @@
 package database
 
 import (
+	"encoding/json"
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -211,16 +212,16 @@ func (c *Cohort) BeforeCreate(tx *gorm.DB) (err error) {
 
 // SavedFunnel represents a user-saved funnel query
 type SavedFunnel struct {
-	ID          string    `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	ProjectID   string    `gorm:"not null;index;type:varchar(32)" json:"project_id"`
-	Name        string    `gorm:"not null" json:"name"`
-	Description string    `json:"description"`
-	QueryAST    []byte    `gorm:"type:text" json:"query_ast"` // The FunnelsQueryAST
-	IsPinned    bool      `gorm:"default:false" json:"is_pinned"`
-	CreatedByID string    `json:"created_by_id" gorm:"type:varchar(32)"`
-	CreatedBy   *User     `json:"created_by" gorm:"foreignKey:CreatedByID"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string          `gorm:"primaryKey;type:varchar(32)" json:"id"`
+	ProjectID   string          `gorm:"not null;index;type:varchar(32)" json:"project_id"`
+	Name        string          `gorm:"not null" json:"name"`
+	Description string          `json:"description"`
+	QueryAST    json.RawMessage `gorm:"type:text" json:"query_ast"` // The FunnelsQueryAST
+	IsPinned    bool            `gorm:"default:false" json:"is_pinned"`
+	CreatedByID string          `json:"created_by_id" gorm:"type:varchar(32)"`
+	CreatedBy   *User           `json:"created_by" gorm:"foreignKey:CreatedByID"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 func (s *SavedFunnel) BeforeCreate(tx *gorm.DB) (err error) {
