@@ -138,6 +138,10 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 	innerSelects = append(innerSelects, "distinct_id")
 	innerSelects = append(innerSelects, windowFunnelCall+" AS level")
 
+	for i, cond := range conditions {
+		innerSelects = append(innerSelects, fmt.Sprintf("minIf(timestamp, %s) AS step_%d_time", cond, i+1))
+	}
+
 	innerQuery := fmt.Sprintf(`SELECT 
             %s
         FROM events
@@ -152,6 +156,9 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		midGroupBys = append(midGroupBys, breakdownAliases...)
 	}
 	midSelects = append(midSelects, "distinct_id", "MAX(level) as level")
+	for i := range conditions {
+		midSelects = append(midSelects, fmt.Sprintf("min(step_%d_time) as step_%d_time", i+1, i+1))
+	}
 	midGroupBys = append(midGroupBys, "distinct_id")
 
 	midQuery := fmt.Sprintf(`SELECT %s
@@ -187,8 +194,15 @@ WHERE level > 0
 GROUP BY %s
 ORDER BY %s`, strings.Join(outerSelects, ",\n    "), midQuery, strings.Join(outerGroupBys, ", "), strings.Join(outerOrderBy, ", "))
 
+	// Build times array: [0, step2-step1, step3-step2...]
+	var timeDiffs []string
+	timeDiffs = append(timeDiffs, "0")
+	for i := 1; i < len(conditions); i++ {
+		timeDiffs = append(timeDiffs, fmt.Sprintf("dateDiff('second', step_%d_time, step_%d_time)", i, i+1))
+	}
+	timesArrayStr := fmt.Sprintf("[%s] AS times_array", strings.Join(timeDiffs, ", "))
+
 	// Replace "funnel_level" back to "level" in outer result for frontend compatibility
-	finalQuery = strings.Replace(finalQuery, "funnel_level AS level", "funnel_level AS level", 1) // Safe generic replace
 	// To be very precise:
 	finalQuery = fmt.Sprintf(`SELECT 
     %s
@@ -202,8 +216,8 @@ FROM (
 )
 GROUP BY %s
 ORDER BY %s`,
-		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level"), ",\n    "),
-		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(level) + 1)) AS funnel_level", "distinct_id"), ",\n        "),
+		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level", "avg(if(time_to_reach > 0, time_to_reach, NULL)) as avg_time_to_next"), ",\n    "),
+		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(level) + 1)) AS funnel_level", "distinct_id", timesArrayStr, "times_array[funnel_level] AS time_to_reach"), ",\n        "),
 		midQuery,
 		strings.Join(append(breakdownAliases, "funnel_level"), ", "),
 		strings.Join(append(breakdownAliases, "funnel_level ASC"), ", "),
@@ -447,6 +461,9 @@ func BuildSequenceMatchQuery(req models.FunnelRequest, windowSeconds int) (strin
 		midSelects = append(midSelects, holdAliases...)
 	}
 	midSelects = append(midSelects, levelChecks...)
+	for i := range req.Steps {
+		midSelects = append(midSelects, fmt.Sprintf("minIf(timestamp, cond_%d) AS step_%d_time", i+1, i+1))
+	}
 
 	midQuery := fmt.Sprintf(`SELECT 
     %s
@@ -470,6 +487,12 @@ GROUP BY %s`, strings.Join(midSelects, ",\n    "), innerQuery, strings.Join(appe
 		maxLevelSelects = append(maxLevelSelects, breakdownAliases...)
 	}
 	maxLevelSelects = append(maxLevelSelects, fmt.Sprintf("%s AS max_level", maxLevelExpr))
+	for i := range req.Steps {
+		maxLevelSelects = append(maxLevelSelects, fmt.Sprintf("step_%d_time", i+1))
+	}
+	for _, holdAlias := range holdAliases {
+		maxLevelSelects = append(maxLevelSelects, holdAlias)
+	}
 
 	maxLevelQuery := fmt.Sprintf(`SELECT
     %s
@@ -485,6 +508,9 @@ FROM (
 		aggSelects = append(aggSelects, breakdownAliases...)
 	}
 	aggSelects = append(aggSelects, "max(max_level) AS final_level")
+	for i := range req.Steps {
+		aggSelects = append(aggSelects, fmt.Sprintf("min(step_%d_time) as step_%d_time", i+1, i+1))
+	}
 
 	aggGroupBys := append([]string{"distinct_id"}, breakdownAliases...)
 
@@ -568,6 +594,13 @@ FROM (
 )
 GROUP BY %s`, strings.Join(aggSelects, ", "), maxLevelQuery, strings.Join(aggGroupBys, ", "))
 
+	var timeDiffs []string
+	timeDiffs = append(timeDiffs, "0")
+	for i := 1; i < len(req.Steps); i++ {
+		timeDiffs = append(timeDiffs, fmt.Sprintf("dateDiff('second', step_%d_time, step_%d_time)", i, i+1))
+	}
+	timesArrayStr := fmt.Sprintf("[%s] AS times_array", strings.Join(timeDiffs, ", "))
+
 	// Re-compose finalQuery completely
 	finalQuery = fmt.Sprintf(`SELECT 
     %s
@@ -581,8 +614,8 @@ FROM (
 )
 GROUP BY %s
 ORDER BY %s`,
-		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level"), ",\n    "),
-		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(final_level) + 1)) AS funnel_level", "distinct_id"), ",\n        "),
+		strings.Join(append(breakdownAliases, "funnel_level AS level", "count(DISTINCT distinct_id) as users_at_level", "avg(if(time_to_reach > 0, time_to_reach, NULL)) as avg_time_to_next"), ",\n    "),
+		strings.Join(append(breakdownAliases, "arrayJoin(range(1, toUInt32(final_level) + 1)) AS funnel_level", "distinct_id", timesArrayStr, "times_array[funnel_level] AS time_to_reach"), ",\n        "),
 		aggQuery,
 		strings.Join(append(breakdownAliases, "funnel_level"), ", "),
 		strings.Join(append(breakdownAliases, "funnel_level ASC"), ", "),
