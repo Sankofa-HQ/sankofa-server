@@ -145,6 +145,7 @@ func main() {
 		&database.LexiconProfileProperty{},
 		&database.Cohort{},
 		&database.SavedFunnel{},
+		&database.SavedInsight{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}
@@ -205,11 +206,12 @@ func main() {
 	// HANDLERS
 	authHandler := api.NewAuthHandler(db)
 	projectHandler := api.NewProjectHandler(db, chConn)
-	orgHandler := api.NewOrganizationHandler(db, chConn)               // New
-	eventsHandler := api.NewEventsHandler(db, chConn)                  // Events
-	peopleHandler := api.NewPeopleHandler(db, chConn)                  // People
-	lexiconHandler := api.NewLexiconHandler(db, chConn)                // Lexicon
-	funnelsHandler := api.NewFunnelsHandler(db, chConn, eventsHandler) // Funnels
+	orgHandler := api.NewOrganizationHandler(db, chConn)                 // New
+	eventsHandler := api.NewEventsHandler(db, chConn)                    // Events
+	peopleHandler := api.NewPeopleHandler(db, chConn)                    // People
+	lexiconHandler := api.NewLexiconHandler(db, chConn)                  // Lexicon
+	funnelsHandler := api.NewFunnelsHandler(db, chConn, eventsHandler)   // Funnels
+	insightsHandler := api.NewInsightsHandler(db, chConn, eventsHandler) // Insights
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -219,9 +221,10 @@ func main() {
 	// protected.Use(middleware.RequireAuth)
 
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
-	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)  // Events under /api/v1/events
-	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth) // Lexicon under /api/v1/lexicon
-	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Funnels under /api/v1/projects/:id/funnels
+	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Events under /api/v1/events
+	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth)  // Lexicon under /api/v1/lexicon
+	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)  // Funnels under /api/v1/projects/:id/funnels
+	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Insights under /api/v1/projects/:id/insights
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
