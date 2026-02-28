@@ -62,12 +62,13 @@ func BuildInsightQuery(req models.InsightRequest) (string, []any) {
 
 	// ── Build one sub-query per metric, then UNION ALL ──
 	var metricQueries []string
-	// We need a copy of the base args for each metric sub-query
-	baseArgsLen := len(args)
+	// We collect all args for all sub-queries in order
+	var allArgs []any
 
 	for mi, metric := range req.Metrics {
+		// Start each metric's args with a fresh copy of the base (global) args
 		var metricArgs []any
-		metricArgs = append(metricArgs, args[:baseArgsLen]...)
+		metricArgs = append(metricArgs, args...)
 
 		// Determine event match clause
 		var eventCond string
@@ -141,13 +142,8 @@ GROUP BY %s`,
 		)
 		metricQueries = append(metricQueries, subQ)
 
-		// Collect args from this metric (strip the base args since they'll be in the UNION)
-		if len(metricArgs) > baseArgsLen {
-			// We need to track args PER sub-query in Union order
-			// For UNION ALL, args are simply concatenated
-		}
-		// Replace approach: build args per metric from scratch and collect all
-		args = metricArgs
+		// Append this metric's args to the unified args list
+		allArgs = append(allArgs, metricArgs...)
 	}
 
 	// ── Final UNION ALL query ──
@@ -162,5 +158,5 @@ ORDER BY %s`,
 		strings.Join(orderByCols, ", "),
 	)
 
-	return finalQuery, args
+	return finalQuery, allArgs
 }
