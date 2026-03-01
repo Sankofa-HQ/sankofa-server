@@ -3,16 +3,17 @@ package models
 import "time"
 
 type FunnelRequest struct {
-	ProjectID          string     `json:"project_id"`
-	GlobalDateRange    DateRange  `json:"global_date_range"`
-	WindowValue        int        `json:"window_value"`
-	WindowUnit         string     `json:"window_unit"` // "seconds", "minutes", "hours", "days", "weeks", "months", "sessions"
-	OrderMode          string     `json:"order_mode"`  // "loose" or "strict"
-	HoldConstants      []string   `json:"hold_constants"`
-	GlobalFilters      []Filter   `json:"global_filters"`
-	Breakdowns         []string   `json:"breakdowns"`
-	ExpandedBreakdowns [][]string `json:"-"` // Internal: expanded child keys for each breakdown (set by pre-processing)
-	Steps              []FunnelStep `json:"steps"`
+	ProjectID          string            `json:"project_id"`
+	GlobalDateRange    DateRange         `json:"global_date_range"`
+	WindowValue        int               `json:"window_value"`
+	WindowUnit         string            `json:"window_unit"` // "seconds", "minutes", "hours", "days", "weeks", "months", "sessions"
+	OrderMode          string            `json:"order_mode"`  // "loose" or "strict"
+	HoldConstants      []string          `json:"hold_constants"`
+	GlobalFilters      []Filter          `json:"global_filters"`
+	Breakdowns         []string          `json:"breakdowns"`
+	ColorOverrides     map[string]string `json:"color_overrides,omitempty"`
+	ExpandedBreakdowns [][]string        `json:"-"` // Internal: expanded child keys for each breakdown (set by pre-processing)
+	Steps              []FunnelStep      `json:"steps"`
 }
 
 type DateRange struct {
