@@ -129,6 +129,11 @@ func BuildRetentionQuery(req models.RetentionRequest) (string, []any) {
 	var innerArgs []any
 	innerArgs = append(innerArgs, args...)
 
+	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
+		innerWhereStmt += " AND timestamp >= ? AND timestamp <= ?"
+		innerArgs = append(innerArgs, req.GlobalDateRange.Start, req.GlobalDateRange.End)
+	}
+
 	innerQuery := fmt.Sprintf(`SELECT distinct_id, min(%s(timestamp)) AS user_start_date 
         FROM events 
         WHERE %s 

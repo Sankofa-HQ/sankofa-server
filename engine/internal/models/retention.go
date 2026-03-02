@@ -7,8 +7,9 @@ type RetentionRequest struct {
 	ExpandedStartEvent  []string          `json:"-"`
 	ReturnEvent         string            `json:"return_event"`
 	ExpandedReturnEvent []string          `json:"-"`
+	GlobalDateRange     DateRange         `json:"global_date_range"`
 	TimeWindow          int               `json:"time_window"` // e.g., 7 (intervals)
-	Interval            string            `json:"interval"`    // "day", "week", "month"
+	Interval            string            `json:"interval"`    // "day", "week", "month", "hour"
 	GlobalFilters       []Filter          `json:"global_filters"`
 	Breakdowns          []string          `json:"breakdowns"`
 	ColorOverrides      map[string]string `json:"color_overrides,omitempty"`
