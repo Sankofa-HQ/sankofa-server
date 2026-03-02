@@ -222,17 +222,48 @@ WHERE %s`,
 	returnCondMid := strings.ReplaceAll(returnCond, "event_name", "e.event_name")
 
 	var finalRetentionConds []string
-	finalRetentionConds = append(finalRetentionConds, startCondMid)
 	for i := 1; i <= req.TimeWindow; i++ {
 		finalRetentionConds = append(finalRetentionConds, fmt.Sprintf("(%s AND dateDiff('%s', u.user_start_date, %s(e.timestamp)) = %d)", returnCondMid, chIntervalUnit, timeBucket, i))
 	}
 
+	var retSelects []string
+	var sumConcatSelects []string
+	returnsPerChunk := 31 // ClickHouse's retention() function accepts a maximum of 32 arguments in total (1 start + 31 returns)
+
+	for i := 0; i < len(finalRetentionConds); i += returnsPerChunk {
+		end := i + returnsPerChunk
+		if end > len(finalRetentionConds) {
+			end = len(finalRetentionConds)
+		}
+		chunkReturns := finalRetentionConds[i:end]
+
+		var chunkConds []string
+		chunkConds = append(chunkConds, startCondMid)
+		chunkConds = append(chunkConds, chunkReturns...)
+
+		retIdx := i / returnsPerChunk
+		retSelects = append(retSelects, fmt.Sprintf("retention(\n        %s\n    ) AS ret_arr%d", strings.Join(chunkConds, ",\n        "), retIdx))
+
+		if retIdx == 0 {
+			sumConcatSelects = append(sumConcatSelects, fmt.Sprintf("sumArray(ret_arr%d)", retIdx))
+		} else {
+			// For subsequent chunks, strip out the first result index which represents the `startEvent` occurrence again
+			sumConcatSelects = append(sumConcatSelects, fmt.Sprintf("arraySlice(sumArray(ret_arr%d), 2)", retIdx))
+		}
+	}
+
+	retentionSelectClause := strings.Join(retSelects, ",\n    ")
+
+	sumArrayClause := strings.Join(sumConcatSelects, ",\n        ")
+	if len(sumConcatSelects) > 1 {
+		sumArrayClause = fmt.Sprintf("arrayConcat(\n        %s\n    )", sumArrayClause)
+	}
+	sumArrayClause += " AS retention_array"
+
 	midQuery = fmt.Sprintf(`SELECT
     u.user_start_date AS cohort_date,
     %s
-    retention(
-        %s
-    ) AS ret_arr
+    %s
 FROM events e
 INNER JOIN (
     %s
@@ -240,7 +271,7 @@ INNER JOIN (
 WHERE %s
 GROUP BY %s`,
 		midBreakdownStr,
-		strings.Join(finalRetentionConds, ",\n        "),
+		retentionSelectClause,
 		innerQuery,
 		strings.ReplaceAll(whereStmt, "project_id = ?", "e.project_id = ?"),
 		strings.Join(midGroupBys, ", "),
@@ -261,13 +292,14 @@ GROUP BY %s`,
 
 	finalQuery := fmt.Sprintf(`SELECT
     %s,
-    sumArray(ret_arr) AS retention_array
+    %s
 FROM (
 %s
 )
 GROUP BY %s
 ORDER BY %s`,
 		strings.Join(outerSelects, ",\n    "),
+		sumArrayClause,
 		midQuery,
 		strings.Join(outerGroupBys, ", "),
 		strings.Join(orderBys, ", "),

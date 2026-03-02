@@ -113,6 +113,62 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 		rowMap := fiber.Map{}
 		for i, colName := range cols {
 			val := reflect.ValueOf(pointers[i]).Elem().Interface()
+
+			// ClickHouse `sumArray` often returns `[]uint64` or `[]uint8`.
+			// To ensure fiber.JSON cleanly serializes it as a JSON array (and not optionally as a base64 string or complex object),
+			// we explicitly cast it to a generic slice of interface{} or directly map it safely.
+			if colName == "retention_array" {
+				switch arr := val.(type) {
+				case []uint64:
+					val = arr
+				case []uint8:
+					// Depending on CH driver config, `[]uint8` easily gets base64 encoded by Go JSON marshaler.
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				case []uint16:
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				case []uint32:
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				case []int8:
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				case []int16:
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				case []int32:
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				case []int64:
+					var intArr []uint64
+					for _, v := range arr {
+						intArr = append(intArr, uint64(v))
+					}
+					val = intArr
+				default:
+					fmt.Printf("retention_array has unexpected type: %T\n", val)
+				}
+			}
+
 			rowMap[colName] = val
 		}
 		results = append(results, rowMap)
