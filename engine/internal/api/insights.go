@@ -66,7 +66,7 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 
 	// ── Pre-process: Expand virtual/merged property names in global filters ──
 	for i, f := range req.GlobalFilters {
-		expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, f.Property)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
 		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 			req.GlobalFilters[i].ExpandedProperties = expanded
 		}
@@ -75,7 +75,7 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 	// ── Pre-process: Expand virtual/merged property names in per-metric filters ──
 	for mi, metric := range req.Metrics {
 		for fi, f := range metric.Filters {
-			expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, f.Property)
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
 			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 				req.Metrics[mi].Filters[fi].ExpandedProperties = expanded
 			}
@@ -85,7 +85,7 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 	// ── Pre-process: Expand virtual/merged property names in breakdowns ──
 	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
 	for i, bd := range req.Breakdowns {
-		expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, bd)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, bd)
 		if len(expanded) == 0 {
 			expanded = []string{bd}
 		}

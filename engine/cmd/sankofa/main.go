@@ -12,6 +12,7 @@ import (
 	"sankofa/engine/internal/api"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/middleware"
+	"sankofa/engine/internal/utils"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -40,6 +41,7 @@ var (
 	ADMIN_PASSWORD       string
 	ADMIN_ORG_NAME       string
 	ADMIN_PROJECT_NAME   string
+	GEOIP_DB_PATH        string
 )
 
 func loadConfig() {
@@ -64,6 +66,7 @@ func loadConfig() {
 	ADMIN_PASSWORD = getEnv("ADMIN_PASSWORD", "password")
 	ADMIN_ORG_NAME = getEnv("ADMIN_ORG_NAME", "Sankofa Admin Org")
 	ADMIN_PROJECT_NAME = getEnv("ADMIN_PROJECT_NAME", "Sankofa Internal")
+	GEOIP_DB_PATH = getEnv("GEOIP_DB_PATH", "")
 }
 
 func getEnv(key, fallback string) string {
@@ -78,6 +81,12 @@ type AnalyticsEvent struct {
 	ID                string            `json:"id"`
 	EventName         string            `json:"event_name"`
 	DistinctID        string            `json:"distinct_id"`
+	SessionID         string            `json:"-"`
+	City              string            `json:"-"`
+	Region            string            `json:"-"`
+	Country           string            `json:"-"`
+	OS                string            `json:"-"`
+	DeviceModel       string            `json:"-"`
 	Properties        map[string]string `json:"properties"`
 	DefaultProperties map[string]string `json:"default_properties"`
 	LibVersion        string            `json:"lib_version"`
@@ -118,6 +127,10 @@ func main() {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// INIT GEOIP
+	utils.InitGeoIP(GEOIP_DB_PATH)
+	defer utils.CloseGeoIP()
 
 	// 2. INIT SQLITE (The Brain)
 	db, err := gorm.Open(sqlite.Open(SQLITE_FILE), &gorm.Config{})
@@ -358,6 +371,49 @@ func main() {
 		e.Environment = environment
 		e.Timestamp = time.Now()
 
+		// --- GEOIP RESOLUTION ---
+		clientIP := c.IP()
+		loc := utils.LookupIP(clientIP)
+		if loc != nil {
+			if e.DefaultProperties == nil {
+				e.DefaultProperties = make(map[string]string)
+			}
+			if loc.City != "" {
+				e.DefaultProperties["$city"] = loc.City
+			}
+			if loc.Region != "" {
+				e.DefaultProperties["$region"] = loc.Region
+			}
+			if loc.Country != "" {
+				e.DefaultProperties["$country"] = loc.Country
+			}
+			if loc.Timezone != "" {
+				e.DefaultProperties["$timezone"] = loc.Timezone
+			}
+		}
+
+		// --- PROMOTION LOGIC (Plucking high-value fields) ---
+		if sid, ok := e.Properties["$session_id"]; ok {
+			e.SessionID = sid
+		}
+		if dp := e.DefaultProperties; dp != nil {
+			if city, ok := dp["$city"]; ok {
+				e.City = city
+			}
+			if region, ok := dp["$region"]; ok {
+				e.Region = region
+			}
+			if country, ok := dp["$country"]; ok {
+				e.Country = country
+			}
+			if os, ok := dp["$os"]; ok {
+				e.OS = os
+			}
+			if model, ok := dp["$device_model"]; ok {
+				e.DeviceModel = model
+			}
+		}
+
 		// --- LEXICON GATEKEEPER START ---
 		// Async register event name & properties
 		if database.Store != nil {
@@ -405,6 +461,27 @@ func main() {
 		p.OrganizationID = fmt.Sprint(project.OrganizationID)
 		p.Environment = environment
 		p.Timestamp = time.Now()
+
+		// --- GEOIP RESOLUTION ---
+		clientIP := c.IP()
+		loc := utils.LookupIP(clientIP)
+		if loc != nil {
+			if p.Properties == nil {
+				p.Properties = make(map[string]string)
+			}
+			if loc.City != "" {
+				p.Properties["$city"] = loc.City
+			}
+			if loc.Region != "" {
+				p.Properties["$region"] = loc.Region
+			}
+			if loc.Country != "" {
+				p.Properties["$country"] = loc.Country
+			}
+			if loc.Timezone != "" {
+				p.Properties["$timezone"] = loc.Timezone
+			}
+		}
 
 		select {
 		case personStream <- p:
@@ -522,7 +599,7 @@ func startAliasWorker(ctx context.Context, conn driver.Conn, stream <-chan Perso
 
 func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 	ctx := context.Background()
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (id, tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, properties, default_properties, lib_version)")
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (id, tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, session_id, city, region, country, os, device_model, properties, default_properties, lib_version)")
 	if err != nil {
 		log.Println("❌ Batch Prep Error:", err)
 		return
@@ -543,6 +620,12 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 			e.Timestamp,
 			e.EventName,
 			e.DistinctID,
+			e.SessionID,
+			e.City,
+			e.Region,
+			e.Country,
+			e.OS,
+			e.DeviceModel,
 			e.Properties,
 			e.DefaultProperties,
 			e.LibVersion,
@@ -582,6 +665,12 @@ func initClickHouseSchema(conn driver.Conn) {
 		timestamp DateTime,
 		event_name String,
 		distinct_id String,
+		session_id String,
+		city String,
+		region String,
+		country String,
+		os String,
+		device_model String,
 		properties Map(String, String),
 		default_properties Map(String, String),
 		lib_version String
@@ -617,6 +706,12 @@ func initClickHouseSchema(conn driver.Conn) {
 		for _, col := range cols {
 			_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s String", table, col))
 		}
+	}
+
+	// MIGRATION: Add promoted columns to events if they don't exist
+	promotedCols := []string{"session_id", "city", "region", "country", "os", "device_model"}
+	for _, col := range promotedCols {
+		_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE events ADD COLUMN IF NOT EXISTS %s String", col))
 	}
 
 	// 3. Aliases

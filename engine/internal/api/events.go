@@ -39,6 +39,14 @@ type Event struct {
 	ProjectID         string            `json:"project_id"`
 	OrganizationID    string            `json:"organization_id"`
 	Environment       string            `json:"environment"`
+
+	// Promoted fields for reading from DB
+	SessionID   string `json:"-"`
+	City        string `json:"-"`
+	Region      string `json:"-"`
+	Country     string `json:"-"`
+	OS          string `json:"-"`
+	DeviceModel string `json:"-"`
 }
 
 func (h *EventsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
@@ -537,6 +545,12 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 			timestamp,
 			event_name,
 			distinct_id,
+			session_id,
+			city,
+			region,
+			country,
+			os,
+			device_model,
 			properties,
 			default_properties,
 			lib_version,
@@ -569,6 +583,12 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 			&e.Timestamp,
 			&e.EventName,
 			&e.DistinctID,
+			&e.SessionID,
+			&e.City,
+			&e.Region,
+			&e.Country,
+			&e.OS,
+			&e.DeviceModel,
 			&e.Properties,
 			&e.DefaultProperties,
 			&e.LibVersion,
@@ -580,6 +600,34 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 			log.Println("Row scan error:", err)
 			continue
 		}
+
+		// Remerge promoted fields into Maps for JSON output identical to old schema
+		if e.Properties == nil {
+			e.Properties = make(map[string]string)
+		}
+		if e.DefaultProperties == nil {
+			e.DefaultProperties = make(map[string]string)
+		}
+
+		if e.SessionID != "" {
+			e.Properties["$session_id"] = e.SessionID
+		}
+		if e.City != "" {
+			e.DefaultProperties["$city"] = e.City
+		}
+		if e.Region != "" {
+			e.DefaultProperties["$region"] = e.Region
+		}
+		if e.Country != "" {
+			e.DefaultProperties["$country"] = e.Country
+		}
+		if e.OS != "" {
+			e.DefaultProperties["$os"] = e.OS
+		}
+		if e.DeviceModel != "" {
+			e.DefaultProperties["$device_model"] = e.DeviceModel
+		}
+
 		events = append(events, e)
 	}
 
@@ -727,7 +775,7 @@ func (h *EventsHandler) GetEventDetail(c *fiber.Ctx) error {
 	// 2. Fetch Event from ClickHouse
 	query := `
 		SELECT 
-			id, timestamp, event_name, distinct_id, properties, default_properties, lib_version
+			id, timestamp, event_name, distinct_id, session_id, city, region, country, os, device_model, properties, default_properties, lib_version
 		FROM events
 		WHERE project_id = ? AND environment = ? AND id = ?
 		LIMIT 1
@@ -738,16 +786,49 @@ func (h *EventsHandler) GetEventDetail(c *fiber.Ctx) error {
 		Timestamp         time.Time         `json:"timestamp"`
 		EventName         string            `json:"event_name"`
 		DistinctID        string            `json:"distinct_id"`
+		SessionID         string            `json:"-"`
+		City              string            `json:"-"`
+		Region            string            `json:"-"`
+		Country           string            `json:"-"`
+		OS                string            `json:"-"`
+		DeviceModel       string            `json:"-"`
 		Properties        map[string]string `json:"properties"`
 		DefaultProperties map[string]string `json:"default_properties"`
 		LibVersion        string            `json:"lib_version"`
 	}
 
 	if err := h.CH.QueryRow(context.Background(), query, projID, environment, eventID).Scan(
-		&e.ID, &e.Timestamp, &e.EventName, &e.DistinctID, &e.Properties, &e.DefaultProperties, &e.LibVersion,
+		&e.ID, &e.Timestamp, &e.EventName, &e.DistinctID, &e.SessionID, &e.City, &e.Region, &e.Country, &e.OS, &e.DeviceModel, &e.Properties, &e.DefaultProperties, &e.LibVersion,
 	); err != nil {
 		log.Printf("GetEventDetail error: %v, event_id: %s", err, eventID)
 		return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+	}
+
+	// Remerge promoted fields into Maps for JSON output
+	if e.Properties == nil {
+		e.Properties = make(map[string]string)
+	}
+	if e.DefaultProperties == nil {
+		e.DefaultProperties = make(map[string]string)
+	}
+
+	if e.SessionID != "" {
+		e.Properties["$session_id"] = e.SessionID
+	}
+	if e.City != "" {
+		e.DefaultProperties["$city"] = e.City
+	}
+	if e.Region != "" {
+		e.DefaultProperties["$region"] = e.Region
+	}
+	if e.Country != "" {
+		e.DefaultProperties["$country"] = e.Country
+	}
+	if e.OS != "" {
+		e.DefaultProperties["$os"] = e.OS
+	}
+	if e.DeviceModel != "" {
+		e.DefaultProperties["$device_model"] = e.DeviceModel
 	}
 
 	return c.JSON(fiber.Map{"data": e})

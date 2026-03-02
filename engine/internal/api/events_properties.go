@@ -208,3 +208,30 @@ func applyLexiconToEventProperties(db *gorm.DB, projectID string, rawKeys []stri
 
 	return finalKeys
 }
+
+// ExpandVirtualPropertyNames takes a property name and checks if it is a virtual/merged property in SQLite.
+// If it is, it returns all the raw property names that are merged into it.
+// If it is not, it returns a slice containing just the original property name.
+func ExpandVirtualPropertyNames(db *gorm.DB, projectID string, propertyName string) []string {
+	var parent database.LexiconEventProperty
+	if err := db.Where("project_id = ? AND name = ?", projectID, propertyName).First(&parent).Error; err != nil {
+		return []string{propertyName} // Not found or not a virtual property
+	}
+
+	var children []database.LexiconEventProperty
+	if err := db.Where("project_id = ? AND merged_into_id = ?", projectID, parent.ID).Find(&children).Error; err != nil {
+		return []string{propertyName} // No children
+	}
+
+	if len(children) == 0 {
+		return []string{propertyName}
+	}
+
+	result := make([]string, 0, len(children)+1)
+	result = append(result, propertyName) // Include the parent too, just in case
+	for _, child := range children {
+		result = append(result, child.Name)
+	}
+
+	return result
+}

@@ -63,7 +63,7 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 
 	// Filter Expansions
 	for i, f := range req.GlobalFilters {
-		expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, f.Property)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
 		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 			req.GlobalFilters[i].ExpandedProperties = expanded
 		}
@@ -71,7 +71,7 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 
 	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
 	for i, bd := range req.Breakdowns {
-		expanded := h.eventsHandler.expandVirtualPropertyNames(projectID, bd)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, bd)
 		if len(expanded) == 0 {
 			expanded = []string{bd}
 		}
