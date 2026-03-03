@@ -161,6 +161,7 @@ func main() {
 		&database.SavedFunnel{},
 		&database.SavedInsight{},
 		&database.SavedRetention{},
+		&database.SavedFlow{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}
@@ -226,6 +227,7 @@ func main() {
 	peopleHandler := api.NewPeopleHandler(db, chConn)                        // People
 	lexiconHandler := api.NewLexiconHandler(db, chConn)                      // Lexicon
 	funnelsHandler := api.NewFunnelsHandler(db, chConn, eventsHandler)       // Funnels
+	flowsHandler := api.NewFlowsHandler(db, chConn, eventsHandler)           // Flows
 	insightsHandler := api.NewInsightsHandler(db, chConn, eventsHandler)     // Insights
 	retentionsHandler := api.NewRetentionsHandler(db, chConn, eventsHandler) // Retentions
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
@@ -240,6 +242,7 @@ func main() {
 	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Events under /api/v1/events
 	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Lexicon under /api/v1/lexicon
 	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Funnels under /api/v1/projects/:id/funnels
+	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)      // Flows under /api/v1/projects/:id/flows
 	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Insights under /api/v1/projects/:id/insights
 	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Retentions under /api/v1/projects/:id/retentions
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
