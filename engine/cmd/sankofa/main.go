@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -373,8 +374,16 @@ func main() {
 
 		// --- GEOIP RESOLUTION ---
 		clientIP := c.IP()
+
+		// Debug local IPs for development testing
+		if clientIP == "127.0.0.1" || clientIP == "::1" || strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") || strings.HasPrefix(clientIP, "172.") {
+			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (London).", clientIP)
+			clientIP = "82.31.80.200" // Mock UK Public IP for local testing
+		}
+
 		loc := utils.LookupIP(clientIP)
 		if loc != nil {
+			log.Printf("🌍 GeoIP Success! Resolved IP %s to %s, %s, %s", clientIP, loc.City, loc.Region, loc.Country)
 			if e.DefaultProperties == nil {
 				e.DefaultProperties = make(map[string]string)
 			}
@@ -464,8 +473,14 @@ func main() {
 
 		// --- GEOIP RESOLUTION ---
 		clientIP := c.IP()
+		if clientIP == "127.0.0.1" || clientIP == "::1" || strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") || strings.HasPrefix(clientIP, "172.") {
+			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (London).", clientIP)
+			clientIP = "82.31.80.200" // Mock UK Public IP for local testing
+		}
+
 		loc := utils.LookupIP(clientIP)
 		if loc != nil {
+			log.Printf("🌍 GeoIP Success! Resolved IP %s to %s, %s, %s", clientIP, loc.City, loc.Region, loc.Country)
 			if p.Properties == nil {
 				p.Properties = make(map[string]string)
 			}
