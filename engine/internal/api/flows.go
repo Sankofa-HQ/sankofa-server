@@ -74,7 +74,7 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		var source string
 		var target string
 		var value uint64
-		var stepLevel uint32
+		var stepLevel int64
 
 		if err := rows.Scan(&source, &target, &value, &stepLevel); err != nil {
 			log.Printf("Flow scan error: %v", err)

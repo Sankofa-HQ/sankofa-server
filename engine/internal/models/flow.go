@@ -4,9 +4,14 @@ package models
 type FlowRequest struct {
 	ProjectID          string    `json:"project_id"`
 	GlobalDateRange    DateRange `json:"global_date_range"`
-	StartEvent         string    `json:"start_event"` // The starting event to branch out from
-	StartEventExpanded []string  `json:"-"`           // Internal: expanded list of events for virtual events
-	MaxDepth           int       `json:"max_depth"`   // How many steps deep to calculate
+	StartEvent         string    `json:"start_event"`                  // The starting event to branch out from
+	StartEventExpanded []string  `json:"-"`                            // Internal: expanded list of events for virtual events
+	StepsBefore        int       `json:"steps_before"`                 // How many steps backward to calculate
+	StepsAfter         int       `json:"steps_after"`                  // How many steps forward to calculate
+	BreakdownEvent     string    `json:"breakdown_event,omitempty"`    // Optional event to break down
+	BreakdownProperty  string    `json:"breakdown_property,omitempty"` // Property key to break the event down by
+	EndEvent           string    `json:"end_event,omitempty"`          // Optional destination anchor string
+	EndEventExpanded   []string  `json:"-"`                            // Internal: expanded list of events for destination anchor
 	GlobalFilters      []Filter  `json:"global_filters"`
 }
 
