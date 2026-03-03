@@ -667,6 +667,7 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 	// Resolve project: prefer query param, fallback to user's current project
 	var project database.Project
 	queryProjectID := c.Query("project_id", "")
+	hideSystem := c.Query("hide_system", "false") == "true"
 
 	if queryProjectID != "" {
 		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
@@ -692,16 +693,26 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 
 	// Fetch from Lexicon (SQLite) - The "Gatekeeper" source of truth
 	var totalLexiconEvents int64
-	h.DB.Model(&database.LexiconEvent{}).Where("project_id = ?", project.ID).Count(&totalLexiconEvents)
+
+	lexiconQuery := h.DB.Model(&database.LexiconEvent{}).Where("project_id = ?", project.ID)
+	if hideSystem {
+		lexiconQuery = lexiconQuery.Where("name NOT LIKE '$%'")
+	}
+	lexiconQuery.Count(&totalLexiconEvents)
 
 	var eventNames []string
 
 	if totalLexiconEvents > 0 {
 		var lexiconEvents []database.LexiconEvent
-		if err := h.DB.Model(&database.LexiconEvent{}).
-			Where("project_id = ? AND status = ? AND hidden = ?", project.ID, "approved", false).
-			Order("name ASC").
-			Find(&lexiconEvents).Error; err != nil {
+
+		query := h.DB.Model(&database.LexiconEvent{}).
+			Where("project_id = ? AND status = ? AND hidden = ?", project.ID, "approved", false)
+
+		if hideSystem {
+			query = query.Where("name NOT LIKE '$%'")
+		}
+
+		if err := query.Order("name ASC").Find(&lexiconEvents).Error; err != nil {
 			log.Println("Lexicon Query Error:", err)
 		}
 		for _, e := range lexiconEvents {
@@ -711,10 +722,14 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 		// Fallback: if Lexicon is empty, query ClickHouse directly
 		projID := project.ID
 		environment := c.Query("environment", "live")
-		rows, err := h.CH.Query(context.Background(),
-			"SELECT DISTINCT event_name FROM events WHERE tenant_id = ? AND environment = ? ORDER BY event_name",
-			projID, environment,
-		)
+
+		query := "SELECT DISTINCT event_name FROM events WHERE tenant_id = ? AND environment = ?"
+		if hideSystem {
+			query += " AND event_name NOT LIKE '$%'"
+		}
+		query += " ORDER BY event_name"
+
+		rows, err := h.CH.Query(context.Background(), query, projID, environment)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -874,6 +889,7 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 	environment := c.Query("environment", "live")
 	days := c.QueryInt("days", 30)
 	projID := project.ID
+	hideSystem := c.Query("hide_system", "false") == "true"
 
 	query := `
 		SELECT event_name, count() as cnt
@@ -881,6 +897,13 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 		WHERE tenant_id = ?
 			AND environment = ?
 			AND timestamp >= now() - INTERVAL ? DAY
+	`
+
+	if hideSystem {
+		query += " AND event_name NOT LIKE '$%'\n"
+	}
+
+	query += `
 		GROUP BY event_name
 		ORDER BY cnt DESC
 	`
