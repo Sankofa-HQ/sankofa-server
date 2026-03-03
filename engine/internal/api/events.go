@@ -667,7 +667,7 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 	// Resolve project: prefer query param, fallback to user's current project
 	var project database.Project
 	queryProjectID := c.Query("project_id", "")
-	hideSystem := c.Query("hide_system", "false") == "true"
+	hideSystem := c.Query("hide_system", "true") == "true"
 
 	if queryProjectID != "" {
 		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
@@ -889,7 +889,7 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 	environment := c.Query("environment", "live")
 	days := c.QueryInt("days", 30)
 	projID := project.ID
-	hideSystem := c.Query("hide_system", "false") == "true"
+	hideSystem := c.Query("hide_system", "true") == "true"
 
 	query := `
 		SELECT event_name, count() as cnt
