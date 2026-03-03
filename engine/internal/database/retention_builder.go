@@ -250,10 +250,10 @@ WHERE %s`,
 		retSelects = append(retSelects, fmt.Sprintf("retention(\n        %s\n    ) AS ret_arr%d", strings.Join(chunkConds, ",\n        "), retIdx))
 
 		if retIdx == 0 {
-			sumConcatSelects = append(sumConcatSelects, fmt.Sprintf("sumArray(ret_arr%d)", retIdx))
+			sumConcatSelects = append(sumConcatSelects, fmt.Sprintf("sumForEach(ret_arr%d)", retIdx))
 		} else {
 			// For subsequent chunks, strip out the first result index which represents the `startEvent` occurrence again
-			sumConcatSelects = append(sumConcatSelects, fmt.Sprintf("arraySlice(sumArray(ret_arr%d), 2)", retIdx))
+			sumConcatSelects = append(sumConcatSelects, fmt.Sprintf("arraySlice(sumForEach(ret_arr%d), 2)", retIdx))
 		}
 	}
 
