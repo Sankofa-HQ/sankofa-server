@@ -32,10 +32,9 @@ func BuildFlowQuery(req models.FlowRequest) (string, []any) {
 		maxDepth = 5 // default to 5 steps deep
 	}
 
-	startEvent := req.StartEvent
-
-	// Bind parameters for the `indexOf` and `arraySlice` functions in the prepared statement
-	args = append(args, startEvent, maxDepth)
+	// Bind parameters for the `indexOf` array matching, `arraySlice` depth, and aliasing the initial node.
+	// Since we pass an array to the prepared statement, we CAST to Array(String).
+	args = append(args, req.StartEventExpanded, maxDepth, req.StartEvent)
 
 	query := fmt.Sprintf(`
 WITH session_events AS (
@@ -53,7 +52,7 @@ WITH session_events AS (
 paths AS (
     SELECT
         actor_id,
-        indexOf(event_sequence, ?) AS start_idx,
+        indexOf(arrayMap(x -> has(CAST(? AS Array(String)), x), event_sequence), 1) AS start_idx,
         arraySlice(event_sequence, start_idx, ?) AS path
     FROM session_events
     WHERE start_idx > 0
@@ -62,8 +61,8 @@ edges AS (
     SELECT
         path[i] as raw_source,
         path[i+1] as raw_target,
-        concat(path[i], ' (Step ', toString(i), ')') as source,
-        concat(path[i+1], ' (Step ', toString(i+1), ')') as target,
+        if(i=1, CAST(? AS String), path[i]) || ' (Step ' || toString(i-1) || ')' as source,
+        path[i+1] || ' (Step ' || toString(i) || ')' as target,
         i as step_level
     FROM paths
     ARRAY JOIN arrayEnumerate(path) AS i

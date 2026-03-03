@@ -49,9 +49,17 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 	}
 	req.ProjectID = projectID
 
+	// Expand start event if it's virtual/merged
+	ctx := c.Context()
+	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+	if len(expandedStart) > 0 {
+		req.StartEventExpanded = expandedStart
+	} else {
+		req.StartEventExpanded = []string{req.StartEvent}
+	}
+
 	query, args := database.BuildFlowQuery(req)
 
-	ctx := c.Context()
 	rows, err := h.chConn.Query(ctx, query, args...)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to calculate flow"})
