@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/models"
 
@@ -65,9 +66,10 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		var source string
 		var target string
 		var value uint64
-		var stepLevel uint64
+		var stepLevel uint32
 
 		if err := rows.Scan(&source, &target, &value, &stepLevel); err != nil {
+			log.Printf("Flow scan error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to parse flow results"})
 		}
 
@@ -105,7 +107,10 @@ type SaveFlowRequest struct {
 
 func (h *FlowsHandler) CreateSavedFlow(c *fiber.Ctx) error {
 	projectID := c.Params("project_id")
-	userID := c.Locals("userId").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 
 	var req SaveFlowRequest
 	if err := c.BodyParser(&req); err != nil {
