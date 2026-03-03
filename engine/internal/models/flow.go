@@ -13,6 +13,8 @@ type FlowRequest struct {
 	EndEvent           string    `json:"end_event,omitempty"`          // Optional destination anchor string
 	EndEventExpanded   []string  `json:"-"`                            // Internal: expanded list of events for destination anchor
 	GlobalFilters      []Filter  `json:"global_filters"`
+	HiddenEvents       []string  `json:"hidden_events,omitempty"` // Events to exclude from the visual pathing
+	MaxRows            int       `json:"max_rows,omitempty"`      // Number of top events to display per step
 }
 
 // FlowNode represents a node in the Sankey diagram for @nivo/sankey

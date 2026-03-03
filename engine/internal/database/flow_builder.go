@@ -27,6 +27,18 @@ func BuildFlowQuery(req models.FlowRequest) (string, []any) {
 		}
 	}
 
+	if len(req.HiddenEvents) > 0 {
+		var qMarks string
+		for i, ev := range req.HiddenEvents {
+			if i > 0 {
+				qMarks += ", "
+			}
+			qMarks += "?"
+			whereArgs = append(whereArgs, ev)
+		}
+		whereStmt += fmt.Sprintf(" AND event_name NOT IN (%s)", qMarks)
+	}
+
 	eventNameProj := "event_name"
 	var finalArgs []any
 
