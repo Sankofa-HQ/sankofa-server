@@ -182,6 +182,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	startTime := c.Query("start_time", "")
 	endTime := c.Query("end_time", "")
 	environment := c.Query("environment", "live")
+	hideSystem := c.Query("hide_system", "false") == "true"
 
 	orgID := project.OrganizationID
 	projID := project.ID
@@ -189,6 +190,10 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	// 1. Build Base WHERE Clause
 	whereClause := "WHERE tenant_id = ? AND environment = ?"
 	queryArgs := []interface{}{projID, environment}
+
+	if hideSystem {
+		whereClause += " AND event_name NOT LIKE '$%'"
+	}
 
 	if distinctID != "" {
 		// Resolve all related IDs through the alias chain to find ALL events for this user
