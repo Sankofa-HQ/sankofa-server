@@ -49,19 +49,31 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 	}
 	req.ProjectID = projectID
 
-	// Expand start event if it's virtual/merged
+	// Expand virtual/merged events for the primary anchor
 	ctx := c.Context()
-	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
-	if len(expandedStart) > 0 {
-		req.StartEventExpanded = expandedStart
-	} else {
-		req.StartEventExpanded = []string{req.StartEvent}
+	if len(req.Steps) > 0 && req.Steps[0].EventName != "" {
+		// Multi-step mode: expand the FIRST step's event for virtual event matching
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.Steps[0].EventName})
+		if len(expandedStart) > 0 {
+			req.StartEventExpanded = expandedStart
+		} else {
+			req.StartEventExpanded = []string{req.Steps[0].EventName}
+		}
+	} else if req.StartEvent != "" {
+		// Legacy mode: expand start_event
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+		if len(expandedStart) > 0 {
+			req.StartEventExpanded = expandedStart
+		} else {
+			req.StartEventExpanded = []string{req.StartEvent}
+		}
 	}
 
 	query, args := database.BuildFlowQuery(req)
 
 	rows, err := h.chConn.Query(ctx, query, args...)
 	if err != nil {
+		log.Printf("Flow query error: %v\nQuery: %s\nArgs: %v", err, query, args)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to calculate flow"})
 	}
 	defer rows.Close()
@@ -74,7 +86,7 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		var source string
 		var target string
 		var value uint64
-		var stepLevel int64
+		var stepLevel uint32
 
 		if err := rows.Scan(&source, &target, &value, &stepLevel); err != nil {
 			log.Printf("Flow scan error: %v", err)

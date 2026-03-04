@@ -1,19 +1,34 @@
 package models
 
+// FlowStep represents a single step/anchor in a multi-step flow query.
+type FlowStep struct {
+	ID          int      `json:"id"`
+	EventName   string   `json:"event_name"`
+	StepsBefore int      `json:"steps_before"`
+	StepsAfter  int      `json:"steps_after"`
+	Filters     []Filter `json:"filters,omitempty"`
+}
+
 // FlowRequest specifies the parameters for querying user flows.
 type FlowRequest struct {
-	ProjectID          string    `json:"project_id"`
-	GlobalDateRange    DateRange `json:"global_date_range"`
-	StartEvent         string    `json:"start_event"`          // The starting event to branch out from
-	StartEventExpanded []string  `json:"-"`                    // Internal: expanded list of events for virtual events
-	StepsBefore        int       `json:"steps_before"`         // How many steps backward to calculate
-	StepsAfter         int       `json:"steps_after"`          // How many steps forward to calculate
-	Breakdowns         []string  `json:"breakdowns,omitempty"` // Array of breakdown keys (e.g., sys_conversion, prop_device)
-	EndEvent           string    `json:"end_event,omitempty"`  // Optional destination anchor string
-	EndEventExpanded   []string  `json:"-"`                    // Internal: expanded list of events for destination anchor
-	GlobalFilters      []Filter  `json:"global_filters"`
-	HiddenEvents       []string  `json:"hidden_events,omitempty"` // Events to exclude from the visual pathing
-	MaxRows            int       `json:"max_rows,omitempty"`      // Number of top events to display per step
+	ProjectID       string    `json:"project_id"`
+	GlobalDateRange DateRange `json:"global_date_range"`
+
+	// ── Legacy flat fields (backward compat with old frontend) ──
+	StartEvent         string   `json:"start_event"`
+	StartEventExpanded []string `json:"-"`
+	StepsBefore        int      `json:"steps_before"`
+	StepsAfter         int      `json:"steps_after"`
+	EndEvent           string   `json:"end_event,omitempty"`
+	EndEventExpanded   []string `json:"-"`
+
+	// ── New multi-step fields ──
+	Steps []FlowStep `json:"steps,omitempty"`
+
+	Breakdowns    []string `json:"breakdowns,omitempty"`
+	GlobalFilters []Filter `json:"global_filters"`
+	HiddenEvents  []string `json:"hidden_events,omitempty"`
+	MaxRows       int      `json:"max_rows,omitempty"`
 }
 
 // FlowNode represents a node in the Sankey diagram for @nivo/sankey
