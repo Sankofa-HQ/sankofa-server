@@ -63,7 +63,7 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	// the property value for the anchor events (same approach as legacy mode).
 	var propertyBreakdown string
 	for _, bd := range req.Breakdowns {
-		if bd != "" && bd != "sys_conversion" {
+		if bd != "" && bd != "sys_conversion" && !strings.HasPrefix(bd, "cohort_") {
 			propertyBreakdown = bd
 			break
 		}
@@ -424,7 +424,7 @@ func buildLegacyFlowQuery(req models.FlowRequest) (string, []any) {
 	for _, bd := range req.Breakdowns {
 		if bd == "sys_conversion" {
 			hasSysConversion = true
-		} else if bd != "" {
+		} else if bd != "" && !strings.HasPrefix(bd, "cohort_") {
 			propertyBreakdown = bd
 		}
 	}
