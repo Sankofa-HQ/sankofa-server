@@ -161,6 +161,47 @@ paths AS (
 		edgeUnionParts = append(edgeUnionParts, edgePart)
 	}
 
+	// ── Bridge edges: connect consecutive steps into one continuous Sankey ──
+	// For each pair of consecutive steps (X → Y), emit a per-user edge from
+	// the last column of step X's zone to the first column of step Y's zone.
+	// This creates links like: "event (A+3)" → "event (B-2)" for each user.
+	for i := 0; i < stepCount-1; i++ {
+		currLetter := string(stepLetters[i])
+		nextLetter := string(stepLetters[i+1])
+		currAfter := steps[i].StepsAfter
+		if currAfter <= 0 {
+			currAfter = 3
+		}
+		nextBefore := steps[i+1].StepsBefore
+		if nextBefore < 0 {
+			nextBefore = 0
+		}
+
+		// Build the source label to exactly match sub-slice format: "A+N"
+		sourceLabel := fmt.Sprintf("%s+%d", currLetter, currAfter)
+
+		// Build the target label: "B-N" or "B0" if no before steps
+		var targetLabel string
+		if nextBefore == 0 {
+			targetLabel = fmt.Sprintf("%s0", nextLetter)
+		} else {
+			targetLabel = fmt.Sprintf("%s-%d", nextLetter, nextBefore)
+		}
+
+		bridgePart := fmt.Sprintf(`
+    SELECT
+        event_sequence[idx_%s + %d] || ' (%s)' as source,
+        event_sequence[GREATEST(1, idx_%s - %d)] || ' (%s)' as target,
+        toUInt32(0) as pos
+    FROM paths
+    WHERE idx_%s + %d <= length(event_sequence)`,
+			currLetter, currAfter, sourceLabel,
+			nextLetter, nextBefore, targetLabel,
+			currLetter, currAfter)
+
+		edgeUnionParts = append(edgeUnionParts, bridgePart)
+	}
+
 	edgesCTE := "edges AS (" + strings.Join(edgeUnionParts, "\n    UNION ALL\n") + "\n)"
 
 	query := fmt.Sprintf(`
