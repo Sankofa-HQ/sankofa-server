@@ -58,12 +58,77 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 		whereStmt += fmt.Sprintf(" AND event_name NOT IN (%s)", qMarks)
 	}
 
+	// ── Breakdown handling ──
+	// If there is a property breakdown, modify the event_name projection to append
+	// the property value for the anchor events (same approach as legacy mode).
+	var propertyBreakdown string
+	for _, bd := range req.Breakdowns {
+		if bd != "" && bd != "sys_conversion" {
+			propertyBreakdown = bd
+			break
+		}
+	}
+
+	eventNameProj := "event_name"
+	var eventNameProjArgs []any
+
+	if propertyBreakdown != "" {
+		// Build individual placeholders for each anchor event
+		var anchorPlaceholders []string
+		for _, step := range req.Steps {
+			if step.EventName != "" {
+				anchorPlaceholders = append(anchorPlaceholders, "?")
+				eventNameProjArgs = append(eventNameProjArgs, step.EventName)
+			}
+		}
+		// For anchor events, append (property_value) to the name
+		propExtract := BuildPropertyExtractionSQL(propertyBreakdown)
+		eventNameProj = fmt.Sprintf(
+			"if(event_name IN (%s), event_name || ' (' || coalesce(nullIf(%s, ''), 'Other') || ')', event_name)",
+			strings.Join(anchorPlaceholders, ", "), propExtract,
+		)
+	}
+
 	var finalArgs []any
+	if len(eventNameProjArgs) > 0 {
+		finalArgs = append(finalArgs, eventNameProjArgs...)
+	}
 	finalArgs = append(finalArgs, whereArgs...)
 
 	steps := req.Steps
 	stepCount := len(steps)
 	stepLetters := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+	// ── Step-level filters: build user-qualifying subqueries ──
+	// For each step with filters, we build a subquery that finds qualifying user IDs
+	// (users who performed the anchor event matching all step-level filters).
+	var stepFilterCTEs []string
+	var stepFilterArgs []any
+	var stepFilterWhereExtra []string
+
+	for i, step := range steps {
+		if len(step.Filters) == 0 {
+			continue
+		}
+		letter := string(stepLetters[i])
+		filterStmt, filterArgs := buildFilterConds(step.Filters)
+		if filterStmt == "" {
+			continue
+		}
+		cteName := fmt.Sprintf("step_%s_qualified", letter)
+		cte := fmt.Sprintf(`%s AS (
+    SELECT DISTINCT if(empty(session_id), distinct_id, session_id) AS actor_id
+    FROM events
+    WHERE %s AND event_name = ? AND %s
+)`, cteName, whereStmt, filterStmt)
+		stepFilterCTEs = append(stepFilterCTEs, cte)
+		// Args: whereArgs (for the subquery), event_name, filterArgs
+		stepFilterArgs = append(stepFilterArgs, whereArgs...)
+		stepFilterArgs = append(stepFilterArgs, step.EventName)
+		stepFilterArgs = append(stepFilterArgs, filterArgs...)
+		stepFilterWhereExtra = append(stepFilterWhereExtra,
+			fmt.Sprintf("actor_id IN (SELECT actor_id FROM step_%s_qualified)", letter))
+	}
 
 	// ── Build the chained indexOf columns for each step ──
 	var idxColumns []string
@@ -97,6 +162,11 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	lastLetter := string(stepLetters[stepCount-1])
 	whereFilter := fmt.Sprintf("idx_%s > 0", lastLetter)
 
+	// Add step filter qualifications
+	if len(stepFilterWhereExtra) > 0 {
+		whereFilter += " AND " + strings.Join(stepFilterWhereExtra, " AND ")
+	}
+
 	finalArgs = append(finalArgs, pathsArgs...)
 
 	// ── Compute per-step zone boundaries ──
@@ -122,10 +192,6 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	lastLetter = bounds[stepCount-1].letter
 
 	// ── Build the multiIf label expression ──
-	// Two-phase priority:
-	//   1. ANCHOR checks first: idx_X always → 'X0' (anchors can never be stolen)
-	//   2. ZONE checks in REVERSE order: later steps win for overlapping positions
-	// This prevents A's after-zone from swallowing B's anchor when steps are close.
 	var labelParts []string
 
 	// Phase 1: Anchor positions always get their own step label
@@ -148,7 +214,7 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 
 	multiIfExpr := "multiIf(" + strings.Join(labelParts, ", ") + ", '')"
 
-	// ── Build paths CTE: one continuous slice with labels array ──
+	// ── Build paths CTE ──
 	pathsCTE := fmt.Sprintf(`
 paths AS (
     SELECT
@@ -174,11 +240,7 @@ paths AS (
 
 	finalArgs = append(finalArgs, pathsArgs...)
 
-	// ── Edges: pair consecutive labeled positions ──
-	// lbl_idx has the 1-indexed positions in path that have non-empty labels.
-	// Pairing lbl_idx[k] with lbl_idx[k+1] creates:
-	//   - Within-zone edges (adjacent labeled positions in same step zone)
-	//   - Bridge edges (last labeled pos of zone A → first labeled pos of zone B)
+	// ── Edges CTE ──
 	edgesCTE := `
 edges AS (
     SELECT
@@ -192,30 +254,47 @@ edges AS (
       AND path[lbl_idx[k+1]] != ''
 )`
 
-	query := fmt.Sprintf(`
-WITH session_events AS (
+	// ── Compose final query ──
+	// Prepend step-filter CTEs if any
+	var allCTEs []string
+
+	// Step filter CTEs go first
+	allCTEs = append(allCTEs, stepFilterCTEs...)
+
+	// session_events CTE
+	sessionEventsCTE := fmt.Sprintf(`session_events AS (
     SELECT
         if(empty(session_id), distinct_id, session_id) AS actor_id,
-        groupArray(event_name) AS event_sequence
+        groupArray(%s) AS event_sequence
     FROM (
-        SELECT session_id, distinct_id, event_name as event_name
+        SELECT session_id, distinct_id, %s as event_name
         FROM events
         WHERE %s
         ORDER BY timestamp ASC
     )
     GROUP BY actor_id
-),
-%s,
-%s
+)`, "event_name", eventNameProj, whereStmt)
+
+	allCTEs = append(allCTEs, sessionEventsCTE)
+	allCTEs = append(allCTEs, pathsCTE)
+	allCTEs = append(allCTEs, edgesCTE)
+
+	// Build all args in correct order: stepFilterArgs + eventNameProjArgs + whereArgs + pathsArgs1 + pathsArgs2
+	var allArgs []any
+	allArgs = append(allArgs, stepFilterArgs...)
+	allArgs = append(allArgs, finalArgs...)
+
+	query := fmt.Sprintf(`
+WITH %s
 SELECT source, target, count() as value, toUInt32(0) as step_level
 FROM edges
 GROUP BY source, target
 HAVING value > 0
 ORDER BY value DESC
 LIMIT 1000
-    `, whereStmt, pathsCTE, edgesCTE)
+    `, strings.Join(allCTEs, ",\n"))
 
-	return query, finalArgs
+	return query, allArgs
 }
 
 // ════════════════════════════════════════════════════════════════════════════
