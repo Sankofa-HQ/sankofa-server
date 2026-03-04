@@ -169,6 +169,15 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 
 	finalArgs = append(finalArgs, pathsArgs...)
 
+	// ── Detect conversion breakdown ──
+	var hasSysConversion bool
+	for _, bd := range req.Breakdowns {
+		if bd == "sys_conversion" {
+			hasSysConversion = true
+			break
+		}
+	}
+
 	// ── Compute per-step zone boundaries ──
 	type stepBounds struct {
 		letter string
@@ -215,7 +224,48 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	multiIfExpr := "multiIf(" + strings.Join(labelParts, ", ") + ", '')"
 
 	// ── Build paths CTE ──
-	pathsCTE := fmt.Sprintf(`
+	// For conversion breakdown, we add conversion_status column
+	var pathsCTE string
+	if hasSysConversion && stepCount >= 2 {
+		// With conversion: track if user reached the LAST step anchor
+		// conversion_status is based on whether idx_<lastLetter> > 0 for users
+		// who start at the first step but may not complete to the last.
+		// However, since our WHERE already requires idx_<lastLetter> > 0,
+		// we need to relax that for conversion mode to include non-converters.
+		// Relax: only require the FIRST step anchor to be found.
+		firstStepFilter := fmt.Sprintf("idx_%s > 0", firstLetter)
+
+		pathsCTE = fmt.Sprintf(`
+paths AS (
+    SELECT
+        actor_id, path, labels, conversion_status,
+        arrayFilter(pos -> labels[pos] != '', arrayEnumerate(path)) AS lbl_idx
+    FROM (
+        SELECT
+            actor_id,
+%s,
+            if(idx_%s > 0, 'Converted', 'Did Not Convert') AS conversion_status,
+            GREATEST(1, idx_%s - %d) AS slice_start,
+            if(idx_%s > 0,
+                idx_%s + %d - GREATEST(1, idx_%s - %d) + 1,
+                idx_%s + %d - GREATEST(1, idx_%s - %d) + 1
+            ) AS slice_len,
+            arraySlice(event_sequence, slice_start, slice_len) AS path,
+            arrayMap(pos -> %s, arrayEnumerate(arraySlice(event_sequence, slice_start, slice_len))) AS labels
+        FROM session_events
+        WHERE %s
+    )
+)`,
+			strings.Join(idxColumns, ",\n"),
+			lastLetter,
+			firstLetter, bounds[0].before,
+			lastLetter,
+			lastLetter, bounds[stepCount-1].after, firstLetter, bounds[0].before,
+			firstLetter, bounds[0].after, firstLetter, bounds[0].before,
+			multiIfExpr,
+			firstStepFilter)
+	} else {
+		pathsCTE = fmt.Sprintf(`
 paths AS (
     SELECT
         actor_id, path, labels,
@@ -232,16 +282,33 @@ paths AS (
         WHERE %s
     )
 )`,
-		strings.Join(idxColumns, ",\n"),
-		firstLetter, bounds[0].before,
-		lastLetter, bounds[stepCount-1].after, firstLetter, bounds[0].before,
-		multiIfExpr,
-		whereFilter)
+			strings.Join(idxColumns, ",\n"),
+			firstLetter, bounds[0].before,
+			lastLetter, bounds[stepCount-1].after, firstLetter, bounds[0].before,
+			multiIfExpr,
+			whereFilter)
+	}
 
 	finalArgs = append(finalArgs, pathsArgs...)
 
 	// ── Edges CTE ──
-	edgesCTE := `
+	// For conversion mode, append ' - Converted' or ' - Did Not Convert' to each node label
+	var edgesCTE string
+	if hasSysConversion && stepCount >= 2 {
+		edgesCTE = `
+edges AS (
+    SELECT
+        path[lbl_idx[k]] || ' (' || labels[lbl_idx[k]] || ') - ' || conversion_status as source,
+        path[lbl_idx[k+1]] || ' (' || labels[lbl_idx[k+1]] || ') - ' || conversion_status as target,
+        toUInt32(k) as pos
+    FROM paths
+    ARRAY JOIN arrayEnumerate(lbl_idx) AS k
+    WHERE k < length(lbl_idx)
+      AND path[lbl_idx[k]] != ''
+      AND path[lbl_idx[k+1]] != ''
+)`
+	} else {
+		edgesCTE = `
 edges AS (
     SELECT
         path[lbl_idx[k]] || ' (' || labels[lbl_idx[k]] || ')' as source,
@@ -253,9 +320,9 @@ edges AS (
       AND path[lbl_idx[k]] != ''
       AND path[lbl_idx[k+1]] != ''
 )`
+	}
 
 	// ── Compose final query ──
-	// Prepend step-filter CTEs if any
 	var allCTEs []string
 
 	// Step filter CTEs go first
@@ -279,7 +346,7 @@ edges AS (
 	allCTEs = append(allCTEs, pathsCTE)
 	allCTEs = append(allCTEs, edgesCTE)
 
-	// Build all args in correct order: stepFilterArgs + eventNameProjArgs + whereArgs + pathsArgs1 + pathsArgs2
+	// Build all args in correct order
 	var allArgs []any
 	allArgs = append(allArgs, stepFilterArgs...)
 	allArgs = append(allArgs, finalArgs...)
