@@ -150,13 +150,13 @@ paths AS (
         SELECT
             actor_id,
             GREATEST(1, idx_%s - %d) AS slice_start,
-            arraySlice(event_sequence, slice_start, %d) AS sub_path,
+            arraySlice(event_sequence, slice_start, (idx_%s - slice_start) + 1 + %d) AS sub_path,
             idx_%s - slice_start AS anchor_off
         FROM paths
     )
     ARRAY JOIN arrayEnumerate(sub_path) AS j
     WHERE j < length(sub_path) AND sub_path[j+1] != ''`,
-			letter, letter, letter, before, before+1+after, letter)
+			letter, letter, letter, before, letter, after, letter)
 
 		edgeUnionParts = append(edgeUnionParts, edgePart)
 	}
