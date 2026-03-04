@@ -201,24 +201,38 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	lastLetter = bounds[stepCount-1].letter
 
 	// ── Build the multiIf label expression ──
+	// In conversion mode, non-first-step checks must be guarded with idx_X > 0
+	// because non-converters have idx_B=0, idx_C=0 etc.
 	var labelParts []string
 
 	// Phase 1: Anchor positions always get their own step label
-	for _, bd := range bounds {
+	for i, bd := range bounds {
 		l := bd.letter
-		labelParts = append(labelParts, fmt.Sprintf(
-			"(slice_start + pos - 1) = idx_%s, '%s0'", l, l))
+		if hasSysConversion && stepCount >= 2 && i > 0 {
+			// Guard: only assign anchor label if the step was actually found
+			labelParts = append(labelParts, fmt.Sprintf(
+				"idx_%s > 0 AND (slice_start + pos - 1) = idx_%s, '%s0'", l, l, l))
+		} else {
+			labelParts = append(labelParts, fmt.Sprintf(
+				"(slice_start + pos - 1) = idx_%s, '%s0'", l, l))
+		}
 	}
 
 	// Phase 2: Zone checks in REVERSE order (last step first → later steps win overlaps)
 	for i := len(bounds) - 1; i >= 0; i-- {
 		bd := bounds[i]
 		l := bd.letter
-		labelParts = append(labelParts, fmt.Sprintf(
+		zoneExpr := fmt.Sprintf(
 			"(slice_start + pos - 1) >= GREATEST(1, idx_%s - %d) AND (slice_start + pos - 1) <= idx_%s + %d, "+
 				"concat('%s', if((slice_start + pos - 1 - idx_%s) > 0, '+', ''), "+
 				"toString(slice_start + pos - 1 - idx_%s))",
-			l, bd.before, l, bd.after, l, l, l))
+			l, bd.before, l, bd.after, l, l, l)
+
+		if hasSysConversion && stepCount >= 2 && i > 0 {
+			// Guard: only check zone if the step was actually found
+			zoneExpr = fmt.Sprintf("idx_%s > 0 AND %s", l, zoneExpr)
+		}
+		labelParts = append(labelParts, zoneExpr)
 	}
 
 	multiIfExpr := "multiIf(" + strings.Join(labelParts, ", ") + ", '')"
@@ -228,12 +242,14 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	var pathsCTE string
 	if hasSysConversion && stepCount >= 2 {
 		// With conversion: track if user reached the LAST step anchor
-		// conversion_status is based on whether idx_<lastLetter> > 0 for users
-		// who start at the first step but may not complete to the last.
-		// However, since our WHERE already requires idx_<lastLetter> > 0,
-		// we need to relax that for conversion mode to include non-converters.
-		// Relax: only require the FIRST step anchor to be found.
+		// Relax WHERE: only require the FIRST step anchor to be found.
+		// Non-converters (idx_<lastLetter> = 0) get sliced around step A only.
 		firstStepFilter := fmt.Sprintf("idx_%s > 0", firstLetter)
+
+		// Add step filter qualifications
+		if len(stepFilterWhereExtra) > 0 {
+			firstStepFilter += " AND " + strings.Join(stepFilterWhereExtra, " AND ")
+		}
 
 		pathsCTE = fmt.Sprintf(`
 paths AS (
