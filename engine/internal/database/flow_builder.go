@@ -99,110 +99,98 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 
 	finalArgs = append(finalArgs, pathsArgs...)
 
-	// ── Build paths CTE ──
+	// ── Compute per-step zone boundaries ──
+	type stepBounds struct {
+		letter string
+		before int
+		after  int
+	}
+	var bounds []stepBounds
+	for i := range steps {
+		b := steps[i].StepsBefore
+		if b < 0 {
+			b = 0
+		}
+		a := steps[i].StepsAfter
+		if a <= 0 {
+			a = 3
+		}
+		bounds = append(bounds, stepBounds{letter: string(stepLetters[i]), before: b, after: a})
+	}
+
+	firstLetter := bounds[0].letter
+	lastLetter = bounds[stepCount-1].letter
+
+	// ── Build the multiIf label expression ──
+	// Two-phase priority:
+	//   1. ANCHOR checks first: idx_X always → 'X0' (anchors can never be stolen)
+	//   2. ZONE checks in REVERSE order: later steps win for overlapping positions
+	// This prevents A's after-zone from swallowing B's anchor when steps are close.
+	var labelParts []string
+
+	// Phase 1: Anchor positions always get their own step label
+	for _, bd := range bounds {
+		l := bd.letter
+		labelParts = append(labelParts, fmt.Sprintf(
+			"(slice_start + pos - 1) = idx_%s, '%s0'", l, l))
+	}
+
+	// Phase 2: Zone checks in REVERSE order (last step first → later steps win overlaps)
+	for i := len(bounds) - 1; i >= 0; i-- {
+		bd := bounds[i]
+		l := bd.letter
+		labelParts = append(labelParts, fmt.Sprintf(
+			"(slice_start + pos - 1) >= GREATEST(1, idx_%s - %d) AND (slice_start + pos - 1) <= idx_%s + %d, "+
+				"concat('%s', if((slice_start + pos - 1 - idx_%s) > 0, '+', ''), "+
+				"toString(slice_start + pos - 1 - idx_%s))",
+			l, bd.before, l, bd.after, l, l, l))
+	}
+
+	multiIfExpr := "multiIf(" + strings.Join(labelParts, ", ") + ", '')"
+
+	// ── Build paths CTE: one continuous slice with labels array ──
 	pathsCTE := fmt.Sprintf(`
 paths AS (
     SELECT
-        actor_id,
-        event_sequence,
-%s
-    FROM session_events
-    WHERE %s
-)`, strings.Join(idxColumns, ",\n"), whereFilter)
-
-	// ── Build per-step edge queries via UNION ALL ──
-	// Each step extracts exactly [idx_X - steps_before_X] to [idx_X + steps_after_X]
-	// and labels edges with the step letter and offset.
-	var edgeUnionParts []string
-
-	for i, step := range steps {
-		letter := string(stepLetters[i])
-		before := step.StepsBefore
-		if before < 0 {
-			before = 0
-		}
-		after := step.StepsAfter
-		if after <= 0 {
-			after = 3
-		}
-
-		// For each step:
-		// slice_start_X = GREATEST(1, idx_X - before_X)
-		// slice_len_X   = before_X + 1 + after_X  (capped to array length)
-		// path_X = arraySlice(event_sequence, slice_start_X, slice_len_X)
-		// anchor_offset_X = idx_X - slice_start_X  (position of anchor within sub-slice)
-		//
-		// Edge labels: event_name (LETTER + offset_from_anchor)
-		// Where offset_from_anchor = j - (anchor_offset_X + 1)   (j is 1-indexed position in sub-slice)
-
-		edgePart := fmt.Sprintf(`
-    SELECT
-        sub_path[j] || ' (' || '%s' || 
-            if(j - (anchor_off + 1) = 0, '0', 
-               if(j - (anchor_off + 1) > 0, '+', '')) || 
-            toString(j - (anchor_off + 1)) || ')' as source,
-        sub_path[j+1] || ' (' || '%s' || 
-            if(j + 1 - (anchor_off + 1) = 0, '0', 
-               if(j + 1 - (anchor_off + 1) > 0, '+', '')) || 
-            toString(j + 1 - (anchor_off + 1)) || ')' as target,
-        j as pos
+        actor_id, path, labels,
+        arrayFilter(pos -> labels[pos] != '', arrayEnumerate(path)) AS lbl_idx
     FROM (
         SELECT
             actor_id,
+%s,
             GREATEST(1, idx_%s - %d) AS slice_start,
-            arraySlice(event_sequence, slice_start, (idx_%s - slice_start) + 1 + %d) AS sub_path,
-            idx_%s - slice_start AS anchor_off
-        FROM paths
+            idx_%s + %d - GREATEST(1, idx_%s - %d) + 1 AS slice_len,
+            arraySlice(event_sequence, slice_start, slice_len) AS path,
+            arrayMap(pos -> %s, arrayEnumerate(arraySlice(event_sequence, slice_start, slice_len))) AS labels
+        FROM session_events
+        WHERE %s
     )
-    ARRAY JOIN arrayEnumerate(sub_path) AS j
-    WHERE j < length(sub_path) AND sub_path[j+1] != ''`,
-			letter, letter, letter, before, letter, after, letter)
+)`,
+		strings.Join(idxColumns, ",\n"),
+		firstLetter, bounds[0].before,
+		lastLetter, bounds[stepCount-1].after, firstLetter, bounds[0].before,
+		multiIfExpr,
+		whereFilter)
 
-		edgeUnionParts = append(edgeUnionParts, edgePart)
-	}
+	finalArgs = append(finalArgs, pathsArgs...)
 
-	// ── Bridge edges: connect consecutive steps into one continuous Sankey ──
-	// For each pair of consecutive steps (X → Y), emit a per-user edge from
-	// the last column of step X's zone to the first column of step Y's zone.
-	// This creates links like: "event (A+3)" → "event (B-2)" for each user.
-	for i := 0; i < stepCount-1; i++ {
-		currLetter := string(stepLetters[i])
-		nextLetter := string(stepLetters[i+1])
-		currAfter := steps[i].StepsAfter
-		if currAfter <= 0 {
-			currAfter = 3
-		}
-		nextBefore := steps[i+1].StepsBefore
-		if nextBefore < 0 {
-			nextBefore = 0
-		}
-
-		// Build the source label to exactly match sub-slice format: "A+N"
-		sourceLabel := fmt.Sprintf("%s+%d", currLetter, currAfter)
-
-		// Build the target label: "B-N" or "B0" if no before steps
-		var targetLabel string
-		if nextBefore == 0 {
-			targetLabel = fmt.Sprintf("%s0", nextLetter)
-		} else {
-			targetLabel = fmt.Sprintf("%s-%d", nextLetter, nextBefore)
-		}
-
-		bridgePart := fmt.Sprintf(`
+	// ── Edges: pair consecutive labeled positions ──
+	// lbl_idx has the 1-indexed positions in path that have non-empty labels.
+	// Pairing lbl_idx[k] with lbl_idx[k+1] creates:
+	//   - Within-zone edges (adjacent labeled positions in same step zone)
+	//   - Bridge edges (last labeled pos of zone A → first labeled pos of zone B)
+	edgesCTE := `
+edges AS (
     SELECT
-        event_sequence[idx_%s + %d] || ' (%s)' as source,
-        event_sequence[GREATEST(1, idx_%s - %d)] || ' (%s)' as target,
-        toUInt32(0) as pos
+        path[lbl_idx[k]] || ' (' || labels[lbl_idx[k]] || ')' as source,
+        path[lbl_idx[k+1]] || ' (' || labels[lbl_idx[k+1]] || ')' as target,
+        toUInt32(k) as pos
     FROM paths
-    WHERE idx_%s + %d <= length(event_sequence)`,
-			currLetter, currAfter, sourceLabel,
-			nextLetter, nextBefore, targetLabel,
-			currLetter, currAfter)
-
-		edgeUnionParts = append(edgeUnionParts, bridgePart)
-	}
-
-	edgesCTE := "edges AS (" + strings.Join(edgeUnionParts, "\n    UNION ALL\n") + "\n)"
+    ARRAY JOIN arrayEnumerate(lbl_idx) AS k
+    WHERE k < length(lbl_idx)
+      AND path[lbl_idx[k]] != ''
+      AND path[lbl_idx[k+1]] != ''
+)`
 
 	query := fmt.Sprintf(`
 WITH session_events AS (
