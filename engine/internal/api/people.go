@@ -1137,6 +1137,7 @@ func (h *PeopleHandler) GetPersonHeatmap(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
+	hideSystem := c.Query("hide_system", "false") == "true"
 	projID := project.ID
 
 	// Resolve alias chain to ensure we get all events for identities belonging to this person
@@ -1146,18 +1147,25 @@ func (h *PeopleHandler) GetPersonHeatmap(c *fiber.Ctx) error {
 		allIDs = []string{canonicalID}
 	}
 
-	query := `
+	whereClause := "WHERE project_id = ? AND environment = ? AND distinct_id IN (?)"
+	if hideSystem {
+		whereClause += " AND event_name NOT LIKE '$%'"
+	}
+
+	query := fmt.Sprintf(`
 		SELECT 
 			toString(toDate(timestamp)) as day,
 			count() as value
-		FROM events 
-		WHERE project_id = ? 
-		  AND environment = ? 
-		  AND distinct_id IN (?)
-		  AND timestamp >= now() - INTERVAL 1 YEAR
+		FROM (
+			SELECT distinct_id, event_name, timestamp
+			FROM events 
+			%s
+			LIMIT 1 BY distinct_id, event_name, timestamp
+		)
 		GROUP BY day
 		ORDER BY day ASC
-	`
+	`, whereClause)
+
 	rows, err := h.CH.Query(context.Background(), query, projID, environment, allIDs)
 	if err != nil {
 		log.Println("ClickHouse GetPersonHeatmap Error:", err)
