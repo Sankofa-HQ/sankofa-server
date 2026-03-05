@@ -249,6 +249,7 @@ func main() {
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
 	v1.Get("/people/:id", middleware.RequireAuth, peopleHandler.GetPerson)
+	v1.Get("/people/:id/heatmap", middleware.RequireAuth, peopleHandler.GetPersonHeatmap)
 
 	// Cohorts
 	cohortsHandler := api.NewCohortsHandler(db, chConn)

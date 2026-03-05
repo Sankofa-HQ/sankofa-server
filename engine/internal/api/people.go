@@ -31,6 +31,7 @@ type PersonProfile struct {
 	Properties map[string]string `json:"properties"`
 	LastSeen   time.Time         `json:"last_seen"`
 	Aliases    []string          `json:"aliases"`
+	Sparkline  []uint64          `json:"sparkline"`
 }
 
 // EventWhereClause is a sub-filter on event properties (e.g. "where App Version is 1.0.0")
@@ -610,6 +611,58 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	// Return empty list instead of null
 	if people == nil {
 		people = []PersonProfile{}
+	} else if len(people) > 0 {
+		// --- Fetch 7-Day Sparkline Data ---
+		var allIDs []string
+		// Pre-populate sparkline arrays with 7 zeros
+		for i := range people {
+			people[i].Sparkline = make([]uint64, 7)
+			allIDs = append(allIDs, people[i].DistinctID)
+			allIDs = append(allIDs, people[i].Aliases...)
+		}
+
+		sparkQuery := `
+			SELECT 
+				distinct_id,
+				dateDiff('day', toDate(timestamp), today()) as days_ago,
+				count() as c
+			FROM events
+			WHERE project_id = ? 
+			  AND environment = ? 
+			  AND distinct_id IN (?)
+			  AND timestamp >= now() - INTERVAL 6 DAY
+			GROUP BY distinct_id, days_ago
+		`
+		sparkRows, err := h.CH.Query(context.Background(), sparkQuery, projID, environment, allIDs)
+		if err == nil {
+			defer sparkRows.Close()
+
+			// Map alias to parent index for fast lookup
+			idToIndex := make(map[string]int)
+			for i, p := range people {
+				idToIndex[p.DistinctID] = i
+				for _, a := range p.Aliases {
+					idToIndex[a] = i
+				}
+			}
+
+			for sparkRows.Next() {
+				var dID string
+				var daysAgo int32
+				var count uint64
+				if err := sparkRows.Scan(&dID, &daysAgo, &count); err == nil {
+					// Map days_ago (0=today, 6=6 days ago) to array index (0=oldest, 6=today)
+					idx := 6 - int(daysAgo)
+					if idx >= 0 && idx < 7 {
+						if pIndex, exists := idToIndex[dID]; exists {
+							people[pIndex].Sparkline[idx] += count
+						}
+					}
+				}
+			}
+		} else {
+			log.Println("Details: ClickHouse Sparkline Error:", err)
+		}
 	}
 
 	return c.JSON(fiber.Map{
@@ -1048,4 +1101,86 @@ func (h *PeopleHandler) GetPropertyValues(c *fiber.Ctx) error {
 		"values":   values,
 		"property": property,
 	})
+}
+
+// GetPersonHeatmap - GET /api/v1/people/:id/heatmap
+// Returns daily event counts over the last 365 days for the user
+func (h *PeopleHandler) GetPersonHeatmap(c *fiber.Ctx) error {
+	distinctID := c.Params("id")
+	if distinctID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing distinct_id"})
+	}
+
+	userID, ok := c.Locals("user_id").(string)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	var project database.Project
+	queryProjectID := c.Query("project_id", "")
+
+	if queryProjectID != "" {
+		if err := h.DB.First(&project, "id = ?", queryProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	} else {
+		var user database.User
+		if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get user"})
+		}
+		if user.CurrentProjectID == nil {
+			return c.Status(400).JSON(fiber.Map{"error": "No project selected"})
+		}
+		if err := h.DB.First(&project, "id = ?", *user.CurrentProjectID).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+	}
+
+	environment := c.Query("environment", "live")
+	projID := project.ID
+
+	// Resolve alias chain to ensure we get all events for identities belonging to this person
+	canonicalID := distinctID
+	allIDs := h.resolveAllAliasedIDs(projID, environment, canonicalID)
+	if len(allIDs) == 0 {
+		allIDs = []string{canonicalID}
+	}
+
+	query := `
+		SELECT 
+			toString(toDate(timestamp)) as day,
+			count() as value
+		FROM events 
+		WHERE project_id = ? 
+		  AND environment = ? 
+		  AND distinct_id IN (?)
+		  AND timestamp >= now() - INTERVAL 1 YEAR
+		GROUP BY day
+		ORDER BY day ASC
+	`
+	rows, err := h.CH.Query(context.Background(), query, projID, environment, allIDs)
+	if err != nil {
+		log.Println("ClickHouse GetPersonHeatmap Error:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate heatmap"})
+	}
+	defer rows.Close()
+
+	type HeatmapNode struct {
+		Day   string `json:"day"`
+		Value uint64 `json:"value"`
+	}
+
+	var results []HeatmapNode
+	for rows.Next() {
+		var node HeatmapNode
+		if err := rows.Scan(&node.Day, &node.Value); err == nil {
+			results = append(results, node)
+		}
+	}
+
+	if results == nil {
+		results = []HeatmapNode{}
+	}
+
+	return c.JSON(results)
 }
