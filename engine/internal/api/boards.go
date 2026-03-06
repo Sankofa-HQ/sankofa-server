@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log"
 
 	"sankofa/engine/internal/database"
@@ -26,6 +27,11 @@ func (h *BoardsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 	boards.Post("/", h.CreateBoard)
 	boards.Get("/:id", h.GetBoard)
 	boards.Post("/:id/pin", h.PinBoard)
+
+	// Edit Mode Routes
+	boards.Put("/:id/layout", h.UpdateBoardLayout)
+	boards.Post("/:id/widgets", h.AddBoardWidget)
+	boards.Delete("/:id/widgets/:widgetId", h.DeleteBoardWidget)
 }
 
 func getProjectFromContext(c *fiber.Ctx, db *gorm.DB, userID string) (*database.Project, error) {
@@ -187,4 +193,121 @@ func (h *BoardsHandler) CreateBoard(c *fiber.Ctx) error {
 		"message": "Board created successfully",
 		"board":   board,
 	})
+}
+
+// UpdateBoardLayout handles saving the react-grid-layout JSON array
+func (h *BoardsHandler) UpdateBoardLayout(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	boardID := c.Params("id")
+
+	var board database.Board
+	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
+	}
+
+	if board.IsSystem {
+		return c.Status(403).JSON(fiber.Map{"error": "Cannot modify system board layout"})
+	}
+
+	// We parse arbitrary JSON (the layout array mapped from react-grid-layout)
+	type UpdateLayoutRequest struct {
+		Layout []map[string]interface{} `json:"layout"`
+	}
+
+	var req UpdateLayoutRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid payload format"})
+	}
+
+	// Convert back to string/bytes for DB storage since layout is raw message
+	layoutBytes, err := json.Marshal(req.Layout)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to serialize layout"})
+	}
+
+	if err := h.DB.Model(&board).Update("layout", layoutBytes).Error; err != nil {
+		log.Println("Failed to update layout:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to save layout"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Layout saved", "board": board})
+}
+
+// AddBoardWidget adds a new widget to a board referencing an external query (Saved Funnel, etc)
+func (h *BoardsHandler) AddBoardWidget(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	boardID := c.Params("id")
+	var board database.Board
+	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
+	}
+
+	if board.IsSystem {
+		return c.Status(403).JSON(fiber.Map{"error": "Cannot modify system board"})
+	}
+
+	type AddWidgetRequest struct {
+		Name     string                 `json:"name"`
+		Type     string                 `json:"type"`      // "flow", "funnel", "insight", "retention", "line-chart"
+		QueryAST map[string]interface{} `json:"query_ast"` // Payload to execute it later
+	}
+
+	var req AddWidgetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid payload format"})
+	}
+
+	queryBytes, _ := json.Marshal(req.QueryAST)
+
+	widget := database.BoardWidget{
+		BoardID:  board.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		QueryAST: queryBytes,
+	}
+
+	if err := h.DB.Create(&widget).Error; err != nil {
+		log.Println("Failed to add board widget:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to add widget"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Widget added", "widget": widget})
+}
+
+// DeleteBoardWidget removes a widget by its ID
+func (h *BoardsHandler) DeleteBoardWidget(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	boardID := c.Params("id")
+	widgetID := c.Params("widgetId")
+
+	var board database.Board
+	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
+	}
+
+	if board.IsSystem {
+		return c.Status(403).JSON(fiber.Map{"error": "Cannot modify system board"})
+	}
+
+	if err := h.DB.Where("id = ? AND board_id = ?", widgetID, board.ID).Delete(&database.BoardWidget{}).Error; err != nil {
+		log.Println("Failed to delete widget:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove widget"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Widget removed"})
 }

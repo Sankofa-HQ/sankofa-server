@@ -249,13 +249,13 @@ func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 	// Using the geo.country property. If missing, it's grouped as empty string
 	query := `
 		SELECT 
-			JSONExtractString(properties, '$geo', 'country') as country,
+			if(mapContains(properties, '$country'), properties['$country'], 'Unknown') as country,
 			count(*) as value
 		FROM events
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND JSONHas(properties, '$geo') = 1
+		  AND mapContains(properties, '$country')
 		GROUP BY country
 		ORDER BY value DESC
 		LIMIT 5
@@ -308,13 +308,13 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			JSONExtractString(properties, '$device', 'os') as os,
+			if(mapContains(properties, '$os'), properties['$os'], 'Unknown') as os,
 			count(*) as value
 		FROM events
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND JSONHas(properties, '$device') = 1
+		  AND mapContains(properties, '$os')
 		GROUP BY os
 		ORDER BY value DESC
 		LIMIT 5
@@ -367,13 +367,13 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			JSONExtractString(properties, '$browser') as browser,
+			if(mapContains(properties, '$browser'), properties['$browser'], 'Unknown') as browser,
 			count(*) as value
 		FROM events
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND JSONHas(properties, '$browser') = 1
+		  AND mapContains(properties, '$browser')
 		GROUP BY browser
 		ORDER BY value DESC
 		LIMIT 5
@@ -426,13 +426,13 @@ func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			JSONExtractString(properties, '$lib') as platform,
+			if(mapContains(properties, '$lib'), properties['$lib'], 'Unknown') as platform,
 			count(*) as value
 		FROM events
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND JSONHas(properties, '$lib') = 1
+		  AND mapContains(properties, '$lib')
 		GROUP BY platform
 		ORDER BY value DESC
 		LIMIT 5
