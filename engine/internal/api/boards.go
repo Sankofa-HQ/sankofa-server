@@ -24,6 +24,7 @@ func (h *BoardsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 
 	boards.Get("/", h.ListBoards)
 	boards.Get("/:id", h.GetBoard)
+	boards.Post("/:id/pin", h.PinBoard)
 }
 
 func getProjectFromContext(c *fiber.Ctx, db *gorm.DB, userID string) (*database.Project, error) {
@@ -104,4 +105,43 @@ func (h *BoardsHandler) GetBoard(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"board": board})
+}
+
+// PinBoard sets a specific board as the user's default pinned board for the current project
+func (h *BoardsHandler) PinBoard(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	boardID := c.Params("id")
+
+	// Verify board exists and belongs to the project
+	var targetBoard database.Board
+	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&targetBoard).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
+	}
+
+	// Transaction to safely perform unpin/pin
+	tx := h.DB.Begin()
+
+	// 1. Unpin all current boards for this project
+	if err := tx.Model(&database.Board{}).Where("project_id = ?", project.ID).Update("is_pinned", false).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update board statuses"})
+	}
+
+	// 2. Pin the requested board
+	if err := tx.Model(&targetBoard).Update("is_pinned", true).Error; err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to pin board"})
+	}
+
+	tx.Commit()
+
+	return c.JSON(fiber.Map{
+		"message": "Board pinned successfully",
+		"board":   targetBoard,
+	})
 }

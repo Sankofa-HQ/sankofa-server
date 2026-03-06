@@ -233,6 +233,7 @@ func main() {
 	insightsHandler := api.NewInsightsHandler(db, chConn, eventsHandler)     // Insights
 	retentionsHandler := api.NewRetentionsHandler(db, chConn, eventsHandler) // Retentions
 	boardsHandler := api.NewBoardsHandler(db, chConn)                        // Boards
+	widgetsHandler := api.NewWidgetsHandler(db, chConn)                      // Widgets
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -249,6 +250,7 @@ func main() {
 	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Insights under /api/v1/projects/:id/insights
 	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Retentions under /api/v1/projects/:id/retentions
 	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Boards under /api/v1/boards
+	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Widgets under /api/v1/widgets
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)

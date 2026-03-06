@@ -23,6 +23,10 @@ func (h *WidgetsHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	widgets := router.Group("/widgets", authMiddleware)
 	widgets.Get("/kpi-summary", h.GetKPISummary)
 	widgets.Get("/active-visitors", h.GetActiveVisitorsSeries)
+	widgets.Get("/top-events", h.GetTopEvents)
+	widgets.Get("/geo-breakdown", h.GetGeographicBreakdown)
+	widgets.Get("/device-breakdown", h.GetDeviceBreakdown)
+	widgets.Get("/top-users", h.GetTopUsers)
 }
 
 // GetKPISummary returns 4 aggregated metrics for the top KPI widget row
@@ -162,4 +166,242 @@ func (h *WidgetsHandler) GetActiveVisitorsSeries(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"series": series})
+}
+
+// GetTopEvents returns the top 10 most frequent custom events over the last 30 days
+func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+
+	// Default 30 days window
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+
+	ctx := context.Background()
+
+	query := `
+		SELECT 
+			event_name,
+			count(*) as total_occurrences,
+			uniqExact(distinct_id) as unique_users
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND event_name NOT LIKE '$%'
+		GROUP BY event_name
+		ORDER BY total_occurrences DESC
+		LIMIT 10
+	`
+
+	rows, err := h.CH.Query(ctx, query, project.ID, environment, startDate)
+	if err != nil {
+		fmt.Println("Error querying top events:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query top events"})
+	}
+	defer rows.Close()
+
+	type TopEvent struct {
+		EventName   string `json:"event_name"`
+		TotalVolume uint64 `json:"total_volume"`
+		UniqueUsers uint64 `json:"unique_users"`
+	}
+
+	var events []TopEvent
+
+	for rows.Next() {
+		var name string
+		var volume, users uint64
+		if err := rows.Scan(&name, &volume, &users); err != nil {
+			continue
+		}
+		events = append(events, TopEvent{
+			EventName:   name,
+			TotalVolume: volume,
+			UniqueUsers: users,
+		})
+	}
+
+	return c.JSON(fiber.Map{"events": events})
+}
+
+// GetGeographicBreakdown returns the top 5 countries by event volume over the last 30 days
+func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+
+	ctx := context.Background()
+
+	// Using the geo.country property. If missing, it's grouped as empty string
+	query := `
+		SELECT 
+			JSONExtractString(properties, '$geo', 'country') as country,
+			count(*) as value
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND JSONHas(properties, '$geo') = 1
+		GROUP BY country
+		ORDER BY value DESC
+		LIMIT 5
+	`
+
+	rows, err := h.CH.Query(ctx, query, project.ID, environment, startDate)
+	if err != nil {
+		fmt.Println("Error querying geographic breakdown:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query geographic data"})
+	}
+	defer rows.Close()
+
+	type BreakdownPoint struct {
+		Label string `json:"label"`
+		Value uint64 `json:"value"`
+	}
+	var data []BreakdownPoint
+
+	for rows.Next() {
+		var country string
+		var value uint64
+		if err := rows.Scan(&country, &value); err != nil {
+			continue
+		}
+		if country == "" {
+			country = "Unknown"
+		}
+		data = append(data, BreakdownPoint{
+			Label: country,
+			Value: value,
+		})
+	}
+
+	return c.JSON(fiber.Map{"data": data})
+}
+
+// GetDeviceBreakdown returns the top OS usage breakdown over the last 30 days
+func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+
+	ctx := context.Background()
+
+	query := `
+		SELECT 
+			JSONExtractString(properties, '$device', 'os') as os,
+			count(*) as value
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND JSONHas(properties, '$device') = 1
+		GROUP BY os
+		ORDER BY value DESC
+		LIMIT 5
+	`
+
+	rows, err := h.CH.Query(ctx, query, project.ID, environment, startDate)
+	if err != nil {
+		fmt.Println("Error querying device breakdown:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query device data"})
+	}
+	defer rows.Close()
+
+	type BreakdownPoint struct {
+		Label string `json:"label"`
+		Value uint64 `json:"value"`
+	}
+	var data []BreakdownPoint
+
+	for rows.Next() {
+		var os string
+		var value uint64
+		if err := rows.Scan(&os, &value); err != nil {
+			continue
+		}
+		if os == "" {
+			os = "Unknown"
+		}
+		data = append(data, BreakdownPoint{
+			Label: os,
+			Value: value,
+		})
+	}
+
+	return c.JSON(fiber.Map{"data": data})
+}
+
+// GetTopUsers returns the top 5 most active distinct_ids over the last 30 days
+func (h *WidgetsHandler) GetTopUsers(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+
+	ctx := context.Background()
+
+	query := `
+		SELECT 
+			distinct_id,
+			count(*) as total_events
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND event_name NOT LIKE '$%'
+		GROUP BY distinct_id
+		ORDER BY total_events DESC
+		LIMIT 5
+	`
+
+	rows, err := h.CH.Query(ctx, query, project.ID, environment, startDate)
+	if err != nil {
+		fmt.Println("Error querying top users:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query top users"})
+	}
+	defer rows.Close()
+
+	type TopUser struct {
+		DistinctID  string `json:"distinct_id"`
+		TotalEvents uint64 `json:"total_events"`
+	}
+
+	var users []TopUser
+
+	for rows.Next() {
+		var id string
+		var count uint64
+		if err := rows.Scan(&id, &count); err != nil {
+			continue
+		}
+		users = append(users, TopUser{
+			DistinctID:  id,
+			TotalEvents: count,
+		})
+	}
+
+	return c.JSON(fiber.Map{"users": users})
 }
