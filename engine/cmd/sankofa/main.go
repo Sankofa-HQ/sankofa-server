@@ -162,6 +162,8 @@ func main() {
 		&database.SavedInsight{},
 		&database.SavedRetention{},
 		&database.SavedFlow{},
+		&database.Board{},
+		&database.BoardWidget{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}
@@ -230,6 +232,7 @@ func main() {
 	flowsHandler := api.NewFlowsHandler(db, chConn, eventsHandler)           // Flows
 	insightsHandler := api.NewInsightsHandler(db, chConn, eventsHandler)     // Insights
 	retentionsHandler := api.NewRetentionsHandler(db, chConn, eventsHandler) // Retentions
+	boardsHandler := api.NewBoardsHandler(db, chConn)                        // Boards
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
 	authHandler.RegisterRoutes(apiRouter)
@@ -245,6 +248,7 @@ func main() {
 	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)      // Flows under /api/v1/projects/:id/flows
 	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Insights under /api/v1/projects/:id/insights
 	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Retentions under /api/v1/projects/:id/retentions
+	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Boards under /api/v1/boards
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
