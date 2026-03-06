@@ -23,6 +23,7 @@ func (h *BoardsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 	boards := router.Group("/boards", authMiddleware)
 
 	boards.Get("/", h.ListBoards)
+	boards.Post("/", h.CreateBoard)
 	boards.Get("/:id", h.GetBoard)
 	boards.Post("/:id/pin", h.PinBoard)
 }
@@ -143,5 +144,47 @@ func (h *BoardsHandler) PinBoard(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"message": "Board pinned successfully",
 		"board":   targetBoard,
+	})
+}
+
+// CreateBoard handles the creation of a new custom dashboard
+func (h *BoardsHandler) CreateBoard(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	type CreateBoardRequest struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	var req CreateBoardRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request payload"})
+	}
+
+	if req.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Board name is required"})
+	}
+
+	board := database.Board{
+		ProjectID:   project.ID,
+		Name:        req.Name,
+		Description: req.Description,
+		IsSystem:    false,
+		IsPinned:    false,
+		CreatedByID: userID,
+	}
+
+	if err := h.DB.Create(&board).Error; err != nil {
+		log.Println("Failed to create new board:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create board"})
+	}
+
+	return c.Status(201).JSON(fiber.Map{
+		"message": "Board created successfully",
+		"board":   board,
 	})
 }
