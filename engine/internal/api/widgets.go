@@ -26,6 +26,8 @@ func (h *WidgetsHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	widgets.Get("/top-events", h.GetTopEvents)
 	widgets.Get("/geo-breakdown", h.GetGeographicBreakdown)
 	widgets.Get("/device-breakdown", h.GetDeviceBreakdown)
+	widgets.Get("/browser-breakdown", h.GetBrowserBreakdown)
+	widgets.Get("/platform-breakdown", h.GetPlatformBreakdown)
 	widgets.Get("/top-users", h.GetTopUsers)
 }
 
@@ -342,6 +344,124 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 		}
 		data = append(data, BreakdownPoint{
 			Label: os,
+			Value: value,
+		})
+	}
+
+	return c.JSON(fiber.Map{"data": data})
+}
+
+// GetBrowserBreakdown returns the top browser breakdown over the last 30 days
+func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+
+	ctx := context.Background()
+
+	query := `
+		SELECT 
+			JSONExtractString(properties, '$browser') as browser,
+			count(*) as value
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND JSONHas(properties, '$browser') = 1
+		GROUP BY browser
+		ORDER BY value DESC
+		LIMIT 5
+	`
+
+	rows, err := h.CH.Query(ctx, query, project.ID, environment, startDate)
+	if err != nil {
+		fmt.Println("Error querying browser breakdown:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query browser data"})
+	}
+	defer rows.Close()
+
+	type BreakdownPoint struct {
+		Label string `json:"label"`
+		Value uint64 `json:"value"`
+	}
+	var data []BreakdownPoint
+
+	for rows.Next() {
+		var browser string
+		var value uint64
+		if err := rows.Scan(&browser, &value); err != nil {
+			continue
+		}
+		if browser == "" {
+			browser = "Unknown"
+		}
+		data = append(data, BreakdownPoint{
+			Label: browser,
+			Value: value,
+		})
+	}
+
+	return c.JSON(fiber.Map{"data": data})
+}
+
+// GetPlatformBreakdown returns the SDK lib/platform breakdown over the last 30 days
+func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+
+	ctx := context.Background()
+
+	query := `
+		SELECT 
+			JSONExtractString(properties, '$lib') as platform,
+			count(*) as value
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND JSONHas(properties, '$lib') = 1
+		GROUP BY platform
+		ORDER BY value DESC
+		LIMIT 5
+	`
+
+	rows, err := h.CH.Query(ctx, query, project.ID, environment, startDate)
+	if err != nil {
+		fmt.Println("Error querying platform breakdown:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query platform data"})
+	}
+	defer rows.Close()
+
+	type BreakdownPoint struct {
+		Label string `json:"label"`
+		Value uint64 `json:"value"`
+	}
+	var data []BreakdownPoint
+
+	for rows.Next() {
+		var platform string
+		var value uint64
+		if err := rows.Scan(&platform, &value); err != nil {
+			continue
+		}
+		if platform == "" {
+			platform = "Unknown"
+		}
+		data = append(data, BreakdownPoint{
+			Label: platform,
 			Value: value,
 		})
 	}
