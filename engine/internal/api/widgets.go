@@ -130,10 +130,10 @@ func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 	var avgSessionFloat float64
 	querySession := fmt.Sprintf(`
 		SELECT avg(session_duration) FROM (
-			SELECT mapContains(properties, '$session_id') ? properties['$session_id'] : 'unknown' as session_id,
+			SELECT session_id,
 				   dateDiff('second', MIN(timestamp), MAX(timestamp)) as session_duration
 			FROM events
-			WHERE %s AND mapContains(properties, '$session_id') AND properties['$session_id'] != 'unknown'
+			WHERE %s AND session_id != '' AND session_id != 'unknown'
 			GROUP BY session_id
 			HAVING session_duration > 0
 		)
@@ -294,14 +294,14 @@ func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 	// Using the geo.country property. If missing, it's grouped as empty string
 	query := `
 		SELECT 
-			if(mapContains(properties, '$country'), properties['$country'], 'Unknown') as country,
+			if(country != '', country, 'Unknown') as geo_country,
 			uniqExact(distinct_id) as value
 		FROM events
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
 		  AND event_name NOT LIKE '$%'
-		GROUP BY country
+		GROUP BY geo_country
 		ORDER BY value DESC
 		LIMIT 5
 	`
@@ -353,14 +353,14 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			if(mapContains(properties, '$os'), properties['$os'], 'Unknown') as os,
+			if(os != '', os, 'Unknown') as os_name,
 			uniqExact(distinct_id) as value
 		FROM events
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
 		  AND event_name NOT LIKE '$%'
-		GROUP BY os
+		GROUP BY os_name
 		ORDER BY value DESC
 		LIMIT 5
 	`
@@ -412,7 +412,9 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			if(mapContains(properties, '$browser'), properties['$browser'], 'Unknown') as browser,
+			if(mapContains(default_properties, '$browser'), default_properties['$browser'],
+			   if(mapContains(properties, '$browser'), properties['$browser'], 'Unknown')
+			) as browser,
 			uniqExact(distinct_id) as value
 		FROM events
 		WHERE project_id = ? 
@@ -471,7 +473,9 @@ func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			if(mapContains(properties, '$lib'), properties['$lib'], 'Unknown') as platform,
+			if(mapContains(default_properties, '$lib'), default_properties['$lib'],
+			   if(mapContains(properties, '$lib'), properties['$lib'], 'Unknown')
+			) as platform,
 			uniqExact(distinct_id) as value
 		FROM events
 		WHERE project_id = ? 
