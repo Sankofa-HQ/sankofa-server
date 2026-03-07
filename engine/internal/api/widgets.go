@@ -29,6 +29,51 @@ func (h *WidgetsHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	widgets.Get("/browser-breakdown", h.GetBrowserBreakdown)
 	widgets.Get("/platform-breakdown", h.GetPlatformBreakdown)
 	widgets.Get("/top-users", h.GetTopUsers)
+	widgets.Get("/active-users-today", h.GetActiveUsersToday)
+}
+
+func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	project, err := getProjectFromContext(c, h.DB, userID)
+	if err != nil {
+		return err
+	}
+
+	environment := c.Query("environment", "live")
+
+	// ClickHouse functions today() and yesterday() return dates in local timezone of the server.
+	// It's safer to use GMT based on current time.
+	now := time.Now().UTC()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Format("2006-01-02 15:04:05")
+	yesterdayStart := now.AddDate(0, 0, -1)
+	yesterdayStartFmt := time.Date(yesterdayStart.Year(), yesterdayStart.Month(), yesterdayStart.Day(), 0, 0, 0, 0, time.UTC).Format("2006-01-02 15:04:05")
+
+	baseWhere := "project_id = ? AND environment = ? AND event_name NOT LIKE '$%'"
+
+	var todayCount uint64
+	queryToday := fmt.Sprintf(`SELECT uniqExact(distinct_id) FROM events WHERE %s AND timestamp >= ?`, baseWhere)
+	if err := h.CH.QueryRow(context.Background(), queryToday, project.ID, environment, todayStart).Scan(&todayCount); err != nil {
+		todayCount = 0
+	}
+
+	var yesterdayCount uint64
+	queryYesterday := fmt.Sprintf(`SELECT uniqExact(distinct_id) FROM events WHERE %s AND timestamp >= ? AND timestamp < ?`, baseWhere)
+	if err := h.CH.QueryRow(context.Background(), queryYesterday, project.ID, environment, yesterdayStartFmt, todayStart).Scan(&yesterdayCount); err != nil {
+		yesterdayCount = 0
+	}
+
+	var pctChange float64
+	if yesterdayCount > 0 {
+		pctChange = (float64(todayCount) - float64(yesterdayCount)) / float64(yesterdayCount) * 100
+	} else if todayCount > 0 {
+		pctChange = 100
+	}
+
+	return c.JSON(fiber.Map{
+		"today":             todayCount,
+		"yesterday":         yesterdayCount,
+		"percentage_change": pctChange,
+	})
 }
 
 // GetKPISummary returns 4 aggregated metrics for the top KPI widget row
