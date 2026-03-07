@@ -210,10 +210,6 @@ func (h *BoardsHandler) UpdateBoardLayout(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
-	if board.IsSystem {
-		return c.Status(403).JSON(fiber.Map{"error": "Cannot modify system board layout"})
-	}
-
 	// We parse arbitrary JSON (the layout array mapped from react-grid-layout)
 	type UpdateLayoutRequest struct {
 		Layout []map[string]interface{} `json:"layout"`
@@ -250,10 +246,6 @@ func (h *BoardsHandler) AddBoardWidget(c *fiber.Ctx) error {
 	var board database.Board
 	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
-	}
-
-	if board.IsSystem {
-		return c.Status(403).JSON(fiber.Map{"error": "Cannot modify system board"})
 	}
 
 	type AddWidgetRequest struct {
@@ -298,10 +290,6 @@ func (h *BoardsHandler) DeleteBoardWidget(c *fiber.Ctx) error {
 	var board database.Board
 	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
-	}
-
-	if board.IsSystem {
-		return c.Status(403).JSON(fiber.Map{"error": "Cannot modify system board"})
 	}
 
 	if err := h.DB.Where("id = ? AND board_id = ?", widgetID, board.ID).Delete(&database.BoardWidget{}).Error; err != nil {
