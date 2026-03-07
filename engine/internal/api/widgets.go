@@ -95,16 +95,32 @@ func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 	// System events are ignored by default in the Dashboard KPI
 	baseWhere := "project_id = ? AND environment = ? AND timestamp >= ? AND timestamp <= ? AND event_name NOT LIKE '$%'"
 
-	// 1. Total Active Users (Count Distinct)
+	// 1. Total Active Users (Count Distinct from events)
 	var activeUsers uint64
 	queryUsers := fmt.Sprintf(`SELECT COUNT(DISTINCT distinct_id) FROM events WHERE %s`, baseWhere)
 	if err := h.CH.QueryRow(context.Background(), queryUsers, project.ID, environment, startDate, endDate).Scan(&activeUsers); err != nil {
 		activeUsers = 0
 	}
 
-	// 2. Total Events
+	// 1b. Identified Users (from persons table - users with profiles)
+	var identifiedUsers uint64
+	queryIdentified := `SELECT COUNT(DISTINCT distinct_id) FROM persons WHERE project_id = ? AND environment = ?`
+	if err := h.CH.QueryRow(context.Background(), queryIdentified, project.ID, environment).Scan(&identifiedUsers); err != nil {
+		identifiedUsers = 0
+	}
+
+	// Calculate identification rate
+	var identificationRate float64
+	if activeUsers > 0 {
+		identificationRate = float64(identifiedUsers) / float64(activeUsers) * 100
+		if identificationRate > 100 {
+			identificationRate = 100
+		}
+	}
+
+	// 2. Total Events (deduplicated same way as events page: LIMIT 1 BY distinct_id, event_name, timestamp)
 	var totalEvents uint64
-	queryEvents := fmt.Sprintf(`SELECT COUNT(1) FROM events WHERE %s`, baseWhere)
+	queryEvents := fmt.Sprintf(`SELECT count() FROM (SELECT distinct_id, event_name, timestamp FROM events WHERE %s LIMIT 1 BY distinct_id, event_name, timestamp)`, baseWhere)
 	if err := h.CH.QueryRow(context.Background(), queryEvents, project.ID, environment, startDate, endDate).Scan(&totalEvents); err != nil {
 		totalEvents = 0
 	}
@@ -149,11 +165,13 @@ func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 	sessionTimeFmt := fmt.Sprintf("%dm %ds", minutes, seconds)
 
 	return c.JSON(fiber.Map{
-		"active_users":     activeUsers,
-		"total_events":     totalEvents,
-		"new_users":        newUsers,
-		"avg_session_time": sessionTimeFmt,
-		"period":           "30d",
+		"active_users":        activeUsers,
+		"identified_users":    identifiedUsers,
+		"identification_rate": identificationRate,
+		"total_events":        totalEvents,
+		"new_users":           newUsers,
+		"avg_session_time":    sessionTimeFmt,
+		"period":              "30d",
 	})
 }
 
@@ -236,11 +254,15 @@ func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 			event_name,
 			count(*) as total_occurrences,
 			uniqExact(distinct_id) as unique_users
-		FROM events
-		WHERE project_id = ? 
-		  AND environment = ?
-		  AND timestamp >= ?
-		  AND event_name NOT LIKE '$%'
+		FROM (
+			SELECT distinct_id, event_name, timestamp
+			FROM events
+			WHERE project_id = ? 
+			  AND environment = ?
+			  AND timestamp >= ?
+			  AND event_name NOT LIKE '$%'
+			LIMIT 1 BY distinct_id, event_name, timestamp
+		)
 		GROUP BY event_name
 		ORDER BY total_occurrences DESC
 		LIMIT 10
