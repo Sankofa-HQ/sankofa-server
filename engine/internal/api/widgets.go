@@ -300,7 +300,6 @@ func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND mapContains(properties, '$country')
 		GROUP BY country
 		ORDER BY value DESC
 		LIMIT 5
@@ -359,7 +358,6 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND mapContains(properties, '$os')
 		GROUP BY os
 		ORDER BY value DESC
 		LIMIT 5
@@ -418,7 +416,6 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND mapContains(properties, '$browser')
 		GROUP BY browser
 		ORDER BY value DESC
 		LIMIT 5
@@ -477,7 +474,6 @@ func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 		WHERE project_id = ? 
 		  AND environment = ?
 		  AND timestamp >= ?
-		  AND mapContains(properties, '$lib')
 		GROUP BY platform
 		ORDER BY value DESC
 		LIMIT 5
