@@ -164,6 +164,7 @@ func main() {
 		&database.SavedFlow{},
 		&database.Board{},
 		&database.BoardWidget{},
+		&database.BoardShare{},
 	); err != nil {
 		log.Fatal("❌ Migration failed:", err)
 	}

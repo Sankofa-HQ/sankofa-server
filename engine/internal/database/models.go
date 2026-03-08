@@ -359,3 +359,27 @@ func (w *BoardWidget) BeforeCreate(tx *gorm.DB) (err error) {
 	}
 	return
 }
+
+// BoardShare tracks sharing of a board with users, teams, or entire projects
+type BoardShare struct {
+	ID             string    `gorm:"primaryKey;type:varchar(32)" json:"id"`
+	BoardID        string    `gorm:"not null;index;type:varchar(32)" json:"board_id"`
+	Board          *Board    `json:"board,omitempty" gorm:"foreignKey:BoardID"`
+	SharedWithType string    `gorm:"not null;type:varchar(16)" json:"shared_with_type"` // "user", "team", "project"
+	SharedWithID   string    `gorm:"not null;type:varchar(32)" json:"shared_with_id"`
+	Permission     string    `gorm:"default:'viewer';type:varchar(16)" json:"permission"` // "viewer", "editor"
+	SharedByID     string    `gorm:"not null;type:varchar(32)" json:"shared_by_id"`
+	SharedBy       *User     `json:"shared_by,omitempty" gorm:"foreignKey:SharedByID"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (bs *BoardShare) BeforeCreate(tx *gorm.DB) (err error) {
+	if bs.ID == "" {
+		id, err := gonanoid.New(21)
+		if err != nil {
+			return err
+		}
+		bs.ID = "bshr_" + id
+	}
+	return
+}
