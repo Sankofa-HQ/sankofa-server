@@ -4,6 +4,7 @@ infra/sankofa_data/
 *.db
 *.db-journal
 *.db-wal
+*.db.*
 
 # Secrets
 .env
@@ -16,6 +17,7 @@ infra/sankofa_data/
 *.exe
 *.test
 *.out
+
 
 # Logs
 *.log
