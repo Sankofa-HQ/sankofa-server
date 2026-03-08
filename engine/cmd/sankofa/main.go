@@ -44,6 +44,12 @@ var (
 	ADMIN_ORG_NAME       string
 	ADMIN_PROJECT_NAME   string
 	GEOIP_DB_PATH        string
+
+	// B2 Configuration
+	B2_KEY_ID            string
+	B2_APP_KEY           string
+	B2_BUCKET_NAME       string
+	B2_ENDPOINT          string
 )
 
 func loadConfig() {
@@ -69,6 +75,11 @@ func loadConfig() {
 	ADMIN_ORG_NAME = getEnv("ADMIN_ORG_NAME", "Sankofa Admin Org")
 	ADMIN_PROJECT_NAME = getEnv("ADMIN_PROJECT_NAME", "Sankofa Internal")
 	GEOIP_DB_PATH = getEnv("GEOIP_DB_PATH", "")
+
+	B2_KEY_ID = getEnv("B2_KEY_ID", "")
+	B2_APP_KEY = getEnv("B2_APP_KEY", "")
+	B2_BUCKET_NAME = getEnv("B2_BUCKET_NAME", "sankofa-replays")
+	B2_ENDPOINT = getEnv("B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
 }
 
 func getEnv(key, fallback string) string {
