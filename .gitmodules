@@ -1,0 +1,3 @@
+[submodule "engine/ee"]
+	path = engine/ee
+	url = https://github.com/Sankofa-HQ/sankofa-ee-backend.git
