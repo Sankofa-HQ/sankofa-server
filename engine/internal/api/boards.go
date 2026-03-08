@@ -380,7 +380,7 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
-	// Create the copy (layout will be remapped after widgets are created)
+	// Create the copy (layout will be set after widgets are created)
 	newBoard := database.Board{
 		ProjectID:   project.ID,
 		Name:        original.Name + " (Copy)",
@@ -394,35 +394,94 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to duplicate board"})
 	}
 
-	// Copy widgets and build old→new ID mapping
 	idMapping := make(map[string]string) // oldWidgetID → newWidgetID
-	for _, w := range original.Widgets {
-		newWidget := database.BoardWidget{
-			BoardID:  newBoard.ID,
-			Name:     w.Name,
-			Type:     w.Type,
-			QueryAST: w.QueryAST,
-		}
-		if err := h.DB.Create(&newWidget).Error; err != nil {
-			log.Println("Failed to copy widget:", err)
-			continue
-		}
-		idMapping[w.ID] = newWidget.ID
-	}
 
-	// Remap layout IDs: the layout JSON contains "i" fields referencing old widget IDs
-	if original.Layout != nil && len(original.Layout) > 0 {
+	if original.IsSystem {
+		// System boards have no DB widgets — create them from the default system widget definitions
+		type systemWidgetDef struct {
+			Name       string
+			SystemType string
+			W          int
+			H          int
+		}
+		defaultWidgets := []systemWidgetDef{
+			{Name: "Active Users", SystemType: "active_users", W: 3, H: 2},
+			{Name: "New Users", SystemType: "new_users", W: 3, H: 2},
+			{Name: "Avg Session", SystemType: "avg_session", W: 3, H: 2},
+			{Name: "Total Events", SystemType: "total_events", W: 3, H: 2},
+			{Name: "Active Users Today", SystemType: "active_users_today", W: 3, H: 3},
+			{Name: "Visitors Trend", SystemType: "active_visitors_trend", W: 9, H: 3},
+			{Name: "Top Events", SystemType: "top_events", W: 6, H: 4},
+			{Name: "Top Users", SystemType: "top_users", W: 6, H: 4},
+			{Name: "Geo Breakdown", SystemType: "geo_breakdown", W: 3, H: 3},
+			{Name: "Browser Distribution", SystemType: "browser_breakdown", W: 3, H: 3},
+			{Name: "OS Distribution", SystemType: "device_breakdown", W: 3, H: 3},
+			{Name: "Platform Distribution", SystemType: "platform_breakdown", W: 3, H: 3},
+		}
+
 		var layoutItems []map[string]interface{}
-		if err := json.Unmarshal(original.Layout, &layoutItems); err == nil {
-			for idx, item := range layoutItems {
-				if oldID, ok := item["i"].(string); ok {
-					if newID, exists := idMapping[oldID]; exists {
-						layoutItems[idx]["i"] = newID
+		// Layout positions matching the system dashboard grid
+		positions := []struct{ x, y int }{
+			{0, 0}, {3, 0}, {6, 0}, {9, 0}, // KPI row (y=0)
+			{9, 2}, {0, 2}, // Active Today + Visitors Trend (y=2)
+			{0, 5}, {6, 5}, // Top Events + Top Users (y=5)
+			{0, 9}, {3, 9}, {6, 9}, {9, 9}, // Breakdowns (y=9)
+		}
+
+		for i, def := range defaultWidgets {
+			queryAST, _ := json.Marshal(map[string]string{"system_type": def.SystemType})
+			newWidget := database.BoardWidget{
+				BoardID:  newBoard.ID,
+				Name:     def.Name,
+				Type:     "system",
+				QueryAST: queryAST,
+			}
+			if err := h.DB.Create(&newWidget).Error; err != nil {
+				log.Println("Failed to create system widget:", err)
+				continue
+			}
+			layoutItems = append(layoutItems, map[string]interface{}{
+				"i": newWidget.ID,
+				"x": positions[i].x,
+				"y": positions[i].y,
+				"w": def.W,
+				"h": def.H,
+			})
+		}
+
+		if layoutJSON, err := json.Marshal(layoutItems); err == nil {
+			h.DB.Model(&newBoard).Update("layout", layoutJSON)
+		}
+	} else {
+		// Custom board — copy widgets and remap layout IDs
+		for _, w := range original.Widgets {
+			newWidget := database.BoardWidget{
+				BoardID:  newBoard.ID,
+				Name:     w.Name,
+				Type:     w.Type,
+				QueryAST: w.QueryAST,
+			}
+			if err := h.DB.Create(&newWidget).Error; err != nil {
+				log.Println("Failed to copy widget:", err)
+				continue
+			}
+			idMapping[w.ID] = newWidget.ID
+		}
+
+		// Remap layout IDs
+		if len(original.Layout) > 0 {
+			var layoutItems []map[string]interface{}
+			if err := json.Unmarshal(original.Layout, &layoutItems); err == nil {
+				for idx, item := range layoutItems {
+					if oldID, ok := item["i"].(string); ok {
+						if newID, exists := idMapping[oldID]; exists {
+							layoutItems[idx]["i"] = newID
+						}
 					}
 				}
-			}
-			if remappedLayout, err := json.Marshal(layoutItems); err == nil {
-				h.DB.Model(&newBoard).Update("layout", remappedLayout)
+				if remappedLayout, err := json.Marshal(layoutItems); err == nil {
+					h.DB.Model(&newBoard).Update("layout", remappedLayout)
+				}
 			}
 		}
 	}
