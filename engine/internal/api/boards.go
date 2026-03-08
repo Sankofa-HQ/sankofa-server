@@ -114,7 +114,7 @@ func (h *BoardsHandler) getBoardPermissionLevel(userID string, board *database.B
 func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
-	if err != nil {
+	if err != nil || project == nil {
 		return err
 	}
 

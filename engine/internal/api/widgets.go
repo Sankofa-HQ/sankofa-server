@@ -75,7 +75,7 @@ func getWidgetDateRange(c *fiber.Ctx) (string, string, string) {
 func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
-	if err != nil {
+	if err != nil || project == nil {
 		return err
 	}
 

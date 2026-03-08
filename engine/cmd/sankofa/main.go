@@ -13,6 +13,7 @@ import (
 	"sankofa/engine/internal/api"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/middleware"
+	"sankofa/engine/internal/registry"
 	"sankofa/engine/internal/utils"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -257,6 +258,11 @@ func main() {
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
 	v1.Get("/people/:id", middleware.RequireAuth, peopleHandler.GetPerson)
 	v1.Get("/people/:id/heatmap", middleware.RequireAuth, peopleHandler.GetPersonHeatmap)
+
+	// --- ENTERPRISE HOOKS REGISTRATION ---
+	// This will be a no-op in OSS builds, but will register all EE features
+	// (SAML, Advanced RBAC, Audit Logs, etc.) when compiled with `-tags enterprise`.
+	registry.InitializeAll(app, db, chConn, v1)
 
 	// Cohorts
 	cohortsHandler := api.NewCohortsHandler(db, chConn)
