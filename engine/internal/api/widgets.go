@@ -20,16 +20,56 @@ func NewWidgetsHandler(db *gorm.DB, ch driver.Conn) *WidgetsHandler {
 }
 
 func (h *WidgetsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	widgets := router.Group("/widgets", authMiddleware)
-	widgets.Get("/kpi-summary", h.GetKPISummary)
-	widgets.Get("/active-visitors", h.GetActiveVisitorsSeries)
-	widgets.Get("/top-events", h.GetTopEvents)
-	widgets.Get("/geo-breakdown", h.GetGeographicBreakdown)
-	widgets.Get("/device-breakdown", h.GetDeviceBreakdown)
-	widgets.Get("/browser-breakdown", h.GetBrowserBreakdown)
-	widgets.Get("/platform-breakdown", h.GetPlatformBreakdown)
-	widgets.Get("/top-users", h.GetTopUsers)
-	widgets.Get("/active-users-today", h.GetActiveUsersToday)
+	w := router.Group("/widgets", authMiddleware)
+	w.Get("/kpi-summary", h.GetKPISummary)
+	w.Get("/active-visitors", h.GetActiveVisitorsSeries)
+	w.Get("/top-events", h.GetTopEvents)
+	w.Get("/geo-breakdown", h.GetGeographicBreakdown)
+	w.Get("/device-breakdown", h.GetDeviceBreakdown)
+	w.Get("/browser-breakdown", h.GetBrowserBreakdown)
+	w.Get("/platform-breakdown", h.GetPlatformBreakdown)
+	w.Get("/top-users", h.GetTopUsers)
+	w.Get("/active-users-today", h.GetActiveUsersToday)
+}
+
+// ─── Date Range Helper ───
+// Reads "period" query param and returns (startDate, endDate, periodLabel).
+// Supported values: 7d, 14d, 30d, 90d, today, yesterday, this_week, this_month
+// Defaults to 30d if not specified.
+func getWidgetDateRange(c *fiber.Ctx) (string, string, string) {
+	period := c.Query("period", "30d")
+	now := time.Now().UTC()
+
+	var start, end time.Time
+	end = now
+
+	switch period {
+	case "today":
+		start = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	case "yesterday":
+		yesterday := now.AddDate(0, 0, -1)
+		start = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
+		end = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	case "this_week":
+		weekday := int(now.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		start = time.Date(now.Year(), now.Month(), now.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
+	case "this_month":
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	case "7d":
+		start = now.AddDate(0, 0, -7)
+	case "14d":
+		start = now.AddDate(0, 0, -14)
+	case "90d":
+		start = now.AddDate(0, 0, -90)
+	default: // "30d"
+		period = "30d"
+		start = now.AddDate(0, 0, -30)
+	}
+
+	return start.Format("2006-01-02 15:04:05"), end.Format("2006-01-02 15:04:05"), period
 }
 
 func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
@@ -41,8 +81,7 @@ func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
 
 	environment := c.Query("environment", "live")
 
-	// ClickHouse functions today() and yesterday() return dates in local timezone of the server.
-	// It's safer to use GMT based on current time.
+	// This widget always compares today vs yesterday, regardless of date range
 	now := time.Now().UTC()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Format("2006-01-02 15:04:05")
 	yesterdayStart := now.AddDate(0, 0, -1)
@@ -77,7 +116,7 @@ func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
 }
 
 // GetKPISummary returns 4 aggregated metrics for the top KPI widget row
-// (Active Users, Total Events, Avg Session Time, New Users) spanning the last 30 days
+// (Active Users, Total Events, Avg Session Time, New Users) for the selected period
 func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -86,11 +125,7 @@ func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-
-	// Default 30 days window
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
-	endDate := now.Format("2006-01-02 15:04:05")
+	startDate, endDate, period := getWidgetDateRange(c)
 
 	// System events are ignored by default in the Dashboard KPI
 	baseWhere := "project_id = ? AND environment = ? AND timestamp >= ? AND timestamp <= ? AND event_name NOT LIKE '$%'"
@@ -171,11 +206,11 @@ func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 		"total_events":        totalEvents,
 		"new_users":           newUsers,
 		"avg_session_time":    sessionTimeFmt,
-		"period":              "30d",
+		"period":              period,
 	})
 }
 
-// GetActiveVisitorsSeries returns time-series data of DAU (Daily Active Users) for the last 30 days
+// GetActiveVisitorsSeries returns time-series data of DAU for the selected period
 func (h *WidgetsHandler) GetActiveVisitorsSeries(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -184,10 +219,7 @@ func (h *WidgetsHandler) GetActiveVisitorsSeries(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-
-	// Default 30 days window
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
@@ -233,7 +265,7 @@ func (h *WidgetsHandler) GetActiveVisitorsSeries(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"series": series})
 }
 
-// GetTopEvents returns the top 10 most frequent custom events over the last 30 days
+// GetTopEvents returns the top 10 most frequent custom events for the selected period
 func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -242,29 +274,22 @@ func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-
-	// Default 30 days window
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
 	query := `
 		SELECT 
 			event_name,
-			count(*) as total_occurrences,
+			count() as total_volume,
 			uniqExact(distinct_id) as unique_users
-		FROM (
-			SELECT distinct_id, event_name, timestamp
-			FROM events
-			WHERE project_id = ? 
-			  AND environment = ?
-			  AND timestamp >= ?
-			  AND event_name NOT LIKE '$%'
-			LIMIT 1 BY distinct_id, event_name, timestamp
-		)
+		FROM events
+		WHERE project_id = ? 
+		  AND environment = ?
+		  AND timestamp >= ?
+		  AND event_name NOT LIKE '$%'
 		GROUP BY event_name
-		ORDER BY total_occurrences DESC
+		ORDER BY total_volume DESC
 		LIMIT 10
 	`
 
@@ -280,26 +305,26 @@ func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 		TotalVolume uint64 `json:"total_volume"`
 		UniqueUsers uint64 `json:"unique_users"`
 	}
-
 	var events []TopEvent
 
 	for rows.Next() {
-		var name string
-		var volume, users uint64
-		if err := rows.Scan(&name, &volume, &users); err != nil {
+		var eventName string
+		var totalVolume uint64
+		var uniqueUsers uint64
+		if err := rows.Scan(&eventName, &totalVolume, &uniqueUsers); err != nil {
 			continue
 		}
 		events = append(events, TopEvent{
-			EventName:   name,
-			TotalVolume: volume,
-			UniqueUsers: users,
+			EventName:   eventName,
+			TotalVolume: totalVolume,
+			UniqueUsers: uniqueUsers,
 		})
 	}
 
 	return c.JSON(fiber.Map{"events": events})
 }
 
-// GetGeographicBreakdown returns the top 5 countries by event volume over the last 30 days
+// GetGeographicBreakdown returns the top 5 countries by event volume for the selected period
 func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -308,8 +333,7 @@ func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
@@ -359,7 +383,7 @@ func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"data": data})
 }
 
-// GetDeviceBreakdown returns the top OS usage breakdown over the last 30 days
+// GetDeviceBreakdown returns the top OS usage breakdown for the selected period
 func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -368,8 +392,7 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
@@ -418,7 +441,7 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"data": data})
 }
 
-// GetBrowserBreakdown returns the top browser breakdown over the last 30 days
+// GetBrowserBreakdown returns the top browser breakdown for the selected period
 func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -427,8 +450,7 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
@@ -479,7 +501,7 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"data": data})
 }
 
-// GetPlatformBreakdown returns the SDK lib/platform breakdown over the last 30 days
+// GetPlatformBreakdown returns the SDK lib/platform breakdown for the selected period
 func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -488,8 +510,7 @@ func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
@@ -540,7 +561,7 @@ func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"data": data})
 }
 
-// GetTopUsers returns the top 5 most active distinct_ids over the last 30 days
+// GetTopUsers returns the top 5 most active distinct_ids for the selected period
 func (h *WidgetsHandler) GetTopUsers(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	project, err := getProjectFromContext(c, h.DB, userID)
@@ -549,8 +570,7 @@ func (h *WidgetsHandler) GetTopUsers(c *fiber.Ctx) error {
 	}
 
 	environment := c.Query("environment", "live")
-	now := time.Now().UTC()
-	startDate := now.AddDate(0, 0, -30).Format("2006-01-02 15:04:05")
+	startDate, _, _ := getWidgetDateRange(c)
 
 	ctx := context.Background()
 
