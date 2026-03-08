@@ -380,14 +380,13 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
-	// Create the copy
+	// Create the copy (layout will be remapped after widgets are created)
 	newBoard := database.Board{
 		ProjectID:   project.ID,
 		Name:        original.Name + " (Copy)",
 		Description: original.Description,
 		IsSystem:    false,
 		IsPinned:    false,
-		Layout:      original.Layout,
 		CreatedByID: userID,
 	}
 
@@ -395,7 +394,8 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to duplicate board"})
 	}
 
-	// Copy widgets
+	// Copy widgets and build old→new ID mapping
+	idMapping := make(map[string]string) // oldWidgetID → newWidgetID
 	for _, w := range original.Widgets {
 		newWidget := database.BoardWidget{
 			BoardID:  newBoard.ID,
@@ -405,6 +405,25 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 		}
 		if err := h.DB.Create(&newWidget).Error; err != nil {
 			log.Println("Failed to copy widget:", err)
+			continue
+		}
+		idMapping[w.ID] = newWidget.ID
+	}
+
+	// Remap layout IDs: the layout JSON contains "i" fields referencing old widget IDs
+	if original.Layout != nil && len(original.Layout) > 0 {
+		var layoutItems []map[string]interface{}
+		if err := json.Unmarshal(original.Layout, &layoutItems); err == nil {
+			for idx, item := range layoutItems {
+				if oldID, ok := item["i"].(string); ok {
+					if newID, exists := idMapping[oldID]; exists {
+						layoutItems[idx]["i"] = newID
+					}
+				}
+			}
+			if remappedLayout, err := json.Marshal(layoutItems); err == nil {
+				h.DB.Model(&newBoard).Update("layout", remappedLayout)
+			}
 		}
 	}
 
