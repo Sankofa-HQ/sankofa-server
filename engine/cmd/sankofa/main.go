@@ -46,10 +46,10 @@ var (
 	GEOIP_DB_PATH        string
 
 	// B2 Configuration
-	B2_KEY_ID            string
-	B2_APP_KEY           string
-	B2_BUCKET_NAME       string
-	B2_ENDPOINT          string
+	B2_KEY_ID      string
+	B2_APP_KEY     string
+	B2_BUCKET_NAME string
+	B2_ENDPOINT    string
 )
 
 func loadConfig() {
@@ -405,8 +405,8 @@ func main() {
 
 		// Debug local IPs for development testing
 		if clientIP == "127.0.0.1" || clientIP == "::1" || strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") || strings.HasPrefix(clientIP, "172.") {
-			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (London).", clientIP)
-			clientIP = "82.31.80.200" // Mock UK Public IP for local testing
+			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (Accra).", clientIP)
+			clientIP = "143.105.209.117" // Mock UK Public IP for local testing
 		}
 
 		loc := utils.LookupIP(clientIP)
@@ -503,7 +503,7 @@ func main() {
 		clientIP := c.IP()
 		if clientIP == "127.0.0.1" || clientIP == "::1" || strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") || strings.HasPrefix(clientIP, "172.") {
 			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (London).", clientIP)
-			clientIP = "82.31.80.200" // Mock UK Public IP for local testing
+			clientIP = "143.105.209.117" // Mock UK Public IP for local testing
 		}
 
 		loc := utils.LookupIP(clientIP)
