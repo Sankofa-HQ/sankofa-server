@@ -228,7 +228,8 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     CORS_ALLOWED_ORIGINS,
 		AllowCredentials: true,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id", // Added x-project-id
+		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	}))
 
 	apiRouter := app.Group("/api")
