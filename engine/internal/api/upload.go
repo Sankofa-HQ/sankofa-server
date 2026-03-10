@@ -83,7 +83,12 @@ func UploadHandler(c *fiber.Ctx) error {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to write local file"})
 		}
 
-		url := fmt.Sprintf("http://localhost:8080/uploads/%s", filename)
+		appURL := os.Getenv("APP_URL")
+		if appURL == "" {
+			appURL = "http://localhost:8080"
+		}
+
+		url := fmt.Sprintf("%s/uploads/%s", appURL, filename)
 		return c.JSON(fiber.Map{
 			"status": "ok",
 			"url":    url,
