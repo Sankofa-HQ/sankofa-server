@@ -26,3 +26,4 @@ infra/sankofa_data/
 .DS_Store
 
 
+engine/sankofa-api
