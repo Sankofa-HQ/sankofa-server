@@ -137,9 +137,11 @@ func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
 
 	project := database.Project{
 		OrganizationID: org.ID,
-		Name:           req.Name, // Use Org Name as default Project Name
+		Name:           req.Name + " Project",
 		APIKey:         liveKey,
 		TestAPIKey:     testKey,
+		CreatedByID:    userID,
+		Environment:    "live",
 		Timezone:       "UTC",
 		Region:         req.Region,
 		CreatedAt:      time.Now(),
@@ -440,6 +442,23 @@ func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
 		"status": "invite_sent",
 		"email":  req.Email,
 	})
+}
+
+// CancelInvite - DELETE /v1/orgs/:org_id/invite/:email
+func (h *OrganizationHandler) CancelInvite(c *fiber.Ctx) error {
+	orgID, _ := c.Locals("org_id").(string)
+	email := c.Params("email")
+
+	if email == "" {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Email is required"})
+	}
+
+	result := h.DB.Where("organization_id = ? AND email = ? AND accepted = ?", orgID, email, false).Delete(&database.OrganizationInvite{})
+	if result.RowsAffected == 0 {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Invite not found"})
+	}
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Invite cancelled"})
 }
 
 // VerifyInvite - GET /api/v1/orgs/invite/verify?token=...

@@ -309,6 +309,7 @@ func main() {
 	orgAdmin.Delete("/", orgHandler.DeleteOrganization) // Delete Org
 	orgAdmin.Post("/projects", orgHandler.CreateProject)
 	orgAdmin.Post("/invite", orgHandler.InviteMember)
+	orgAdmin.Delete("/invite/:email", orgHandler.CancelInvite)
 	orgAdmin.Delete("/members/:user_id", orgHandler.RemoveMember)
 	orgAdmin.Get("/members/:user_id/access", orgHandler.GetUserAccess)
 	orgAdmin.Put("/members/:user_id/access", orgHandler.UpdateUserAccess)
@@ -838,7 +839,7 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 		APIKey:         "sk_live_admin_key",
 		TestAPIKey:     "sk_test_admin_key",
 		Timezone:       "UTC",
-		Region:         "us-east-1",
+		Region:         "eu-central-1",
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
