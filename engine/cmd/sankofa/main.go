@@ -309,7 +309,7 @@ func main() {
 	orgAdmin.Delete("/", orgHandler.DeleteOrganization) // Delete Org
 	orgAdmin.Post("/projects", orgHandler.CreateProject)
 	orgAdmin.Post("/invite", orgHandler.InviteMember)
-	orgAdmin.Delete("/invite/:email", orgHandler.CancelInvite)
+	orgAdmin.Post("/invite/cancel", orgHandler.CancelInvite)
 	orgAdmin.Delete("/members/:user_id", orgHandler.RemoveMember)
 	orgAdmin.Get("/members/:user_id/access", orgHandler.GetUserAccess)
 	orgAdmin.Put("/members/:user_id/access", orgHandler.UpdateUserAccess)

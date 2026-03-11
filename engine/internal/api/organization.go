@@ -444,16 +444,18 @@ func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
 	})
 }
 
-// CancelInvite - DELETE /v1/orgs/:org_id/invite/:email
+// CancelInvite - POST /v1/orgs/:org_id/invite/cancel
 func (h *OrganizationHandler) CancelInvite(c *fiber.Ctx) error {
 	orgID, _ := c.Locals("org_id").(string)
-	email := c.Params("email")
 
-	if email == "" {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.Email == "" {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Email is required"})
 	}
 
-	result := h.DB.Where("organization_id = ? AND email = ? AND accepted = ?", orgID, email, false).Delete(&database.OrganizationInvite{})
+	result := h.DB.Where("organization_id = ? AND email = ? AND accepted = ?", orgID, req.Email, false).Delete(&database.OrganizationInvite{})
 	if result.RowsAffected == 0 {
 		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Invite not found"})
 	}
