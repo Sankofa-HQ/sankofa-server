@@ -234,34 +234,80 @@ func (h *OrganizationHandler) DeleteOrganization(c *fiber.Ctx) error {
 
 	tx := h.DB.Begin()
 
-	// Delete Projects, Teams, Members, Org itself
-	// Note: GORM with proper foreign keys might cascade, but manual cleanup is safer if not configured.
+	// Collect IDs for cascade
+	var projectIDs []string
+	tx.Model(&database.Project{}).Where("organization_id = ?", orgID).Pluck("id", &projectIDs)
 
-	// 1. Delete Projects (and their members/data if cascaded)
+	var teamIDs []string
+	tx.Model(&database.Team{}).Where("organization_id = ?", orgID).Pluck("id", &teamIDs)
+
+	// 1. Clean up project-level data
+	if len(projectIDs) > 0 {
+		// 1a. Get all board IDs across all projects
+		var boardIDs []string
+		tx.Model(&database.Board{}).Where("project_id IN ?", projectIDs).Pluck("id", &boardIDs)
+
+		if len(boardIDs) > 0 {
+			tx.Where("board_id IN ?", boardIDs).Delete(&database.BoardShare{})
+			tx.Where("board_id IN ?", boardIDs).Delete(&database.BoardWidget{})
+			tx.Where("project_id IN ?", projectIDs).Delete(&database.Board{})
+		}
+
+		// 1b. Saved analyses
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.SavedFunnel{})
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.SavedInsight{})
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.SavedRetention{})
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.SavedFlow{})
+
+		// 1c. Cohorts
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.Cohort{})
+
+		// 1d. Team-project links
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.TeamProject{})
+
+		// 1e. Project members
+		tx.Where("project_id IN ?", projectIDs).Delete(&database.ProjectMember{})
+
+		// 1f. Clear user current_project_id references
+		tx.Model(&database.User{}).Where("current_project_id IN ?", projectIDs).Update("current_project_id", nil)
+	}
+
+	// 2. Clean up team-level data
+	if len(teamIDs) > 0 {
+		tx.Where("team_id IN ?", teamIDs).Delete(&database.TeamMember{})
+		tx.Where("team_id IN ?", teamIDs).Delete(&database.TeamProject{})
+	}
+
+	// 3. Delete org invites
+	tx.Where("organization_id = ?", orgID).Delete(&database.OrganizationInvite{})
+
+	// 4. Delete projects
 	if err := tx.Where("organization_id = ?", orgID).Delete(&database.Project{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete projects"})
 	}
 
-	// 2. Delete Teams
+	// 5. Delete teams
 	if err := tx.Where("organization_id = ?", orgID).Delete(&database.Team{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete teams"})
 	}
 
-	// 3. Delete Members
+	// 6. Delete org members
 	if err := tx.Where("organization_id = ?", orgID).Delete(&database.OrganizationMember{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete members"})
 	}
 
-	// 4. Delete Organization
-	if err := tx.Delete(&database.Organization{}, orgID).Error; err != nil {
+	// 7. Delete organization
+	if err := tx.Where("id = ?", orgID).Delete(&database.Organization{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete organization"})
 	}
 
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit deletion"})
+	}
 
 	return c.JSON(fiber.Map{"status": "ok", "message": "Organization deleted"})
 }
@@ -562,9 +608,10 @@ func (h *OrganizationHandler) GetMembers(c *fiber.Ctx) error {
 		Email    string    `json:"email"`
 		Role     string    `json:"role"`
 		JoinedAt time.Time `json:"joined_at"`
+		Status   string    `json:"status"` // "active" or "pending"
 	}
 
-	// Join OrganizationMember with User
+	// 1. Fetch active members (accepted)
 	var members []MemberResponse
 	err := h.DB.Table("organization_members").
 		Select("users.id as user_id, users.full_name, users.email, organization_members.role, organization_members.created_at as joined_at").
@@ -574,6 +621,26 @@ func (h *OrganizationHandler) GetMembers(c *fiber.Ctx) error {
 
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch members"})
+	}
+
+	// Mark all as active
+	for i := range members {
+		members[i].Status = "active"
+	}
+
+	// 2. Fetch pending invites
+	var invites []database.OrganizationInvite
+	h.DB.Where("organization_id = ? AND accepted = ? AND expires_at > ?", orgID, false, time.Now()).Find(&invites)
+
+	for _, inv := range invites {
+		members = append(members, MemberResponse{
+			UserID:   "",
+			FullName: "",
+			Email:    inv.Email,
+			Role:     inv.Role,
+			JoinedAt: inv.CreatedAt,
+			Status:   "pending",
+		})
 	}
 
 	return c.JSON(members)

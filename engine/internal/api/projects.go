@@ -324,22 +324,61 @@ func (h *ProjectHandler) DeleteProject(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"error": "Only admins can delete projects"})
 	}
 
-	// 2. Delete Project and related data
+	// 2. Full cascade delete of all related data
 	tx := h.DB.Begin()
 
-	// Delete Project Members
+	// 2a. Get all board IDs for this project
+	var boardIDs []string
+	tx.Model(&database.Board{}).Where("project_id = ?", projectID).Pluck("id", &boardIDs)
+
+	if len(boardIDs) > 0 {
+		// Delete board shares
+		if err := tx.Where("board_id IN ?", boardIDs).Delete(&database.BoardShare{}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to delete board shares"})
+		}
+		// Delete board widgets
+		if err := tx.Where("board_id IN ?", boardIDs).Delete(&database.BoardWidget{}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to delete board widgets"})
+		}
+		// Delete boards
+		if err := tx.Where("project_id = ?", projectID).Delete(&database.Board{}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to delete boards"})
+		}
+	}
+
+	// 2b. Delete saved analyses
+	tx.Where("project_id = ?", projectID).Delete(&database.SavedFunnel{})
+	tx.Where("project_id = ?", projectID).Delete(&database.SavedInsight{})
+	tx.Where("project_id = ?", projectID).Delete(&database.SavedRetention{})
+	tx.Where("project_id = ?", projectID).Delete(&database.SavedFlow{})
+
+	// 2c. Delete cohorts
+	tx.Where("project_id = ?", projectID).Delete(&database.Cohort{})
+
+	// 2d. Delete team-project links
+	tx.Where("project_id = ?", projectID).Delete(&database.TeamProject{})
+
+	// 2e. Delete project members
 	if err := tx.Where("project_id = ?", projectID).Delete(&database.ProjectMember{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete project members"})
 	}
 
-	// Delete Project
-	if err := tx.Delete(&database.Project{}, projectID).Error; err != nil {
+	// 2f. Clear current_project_id for users pointing to this project
+	tx.Model(&database.User{}).Where("current_project_id = ?", projectID).Update("current_project_id", nil)
+
+	// 2g. Delete the project itself
+	if err := tx.Where("id = ?", projectID).Delete(&database.Project{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete project"})
 	}
 
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit deletion"})
+	}
 
 	return c.JSON(fiber.Map{"status": "ok", "message": "Project deleted successfully"})
 }
