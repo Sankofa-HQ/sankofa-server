@@ -348,10 +348,36 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 	var projectMemberships []database.ProjectMember
 	h.DB.Where("user_id = ?", user.ID).Find(&projectMemberships)
 
+	// Build fast lookup maps: orgID -> role, projectID -> role
+	orgRoleMap := make(map[string]string)
+	for _, m := range orgMemberships {
+		orgRoleMap[m.OrganizationID] = m.Role
+	}
+	projectRoleMap := make(map[string]string)
+	for _, m := range projectMemberships {
+		projectRoleMap[m.ProjectID] = m.Role
+	}
+
+	// Determine contextual roles for the *current* org and project
+	var currentOrgRole, currentProjectRole string
+	if user.CurrentProject != nil {
+		currentOrgRole = orgRoleMap[user.CurrentProject.OrganizationID]
+		currentProjectRole = projectRoleMap[user.CurrentProject.ID]
+		// Org owners/admins get implicit admin-level project role
+		if currentOrgRole == "Owner" || currentOrgRole == "Admin" {
+			currentProjectRole = currentOrgRole
+		}
+	}
+
 	return c.JSON(fiber.Map{
 		"user":                user,
 		"org_memberships":     orgMemberships,
 		"project_memberships": projectMemberships,
+		"org_roles":           orgRoleMap,
+		"project_roles":       projectRoleMap,
+		// Contextual shorthand for the current org+project (used by frontend)
+		"org_role":     currentOrgRole,
+		"project_role": currentProjectRole,
 	})
 }
 

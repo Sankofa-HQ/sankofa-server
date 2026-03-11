@@ -27,9 +27,32 @@ func NewAuthMiddleware(db *gorm.DB, secret string) *AuthMiddleware {
 	}
 }
 
-// Remove global jwtSecret variable if it existed here, or just ignore it implies using struct field now
+// --- Role Hierarchies ---
+// Higher number = more power.
 
-// RequireAuth checks for valid user session (JWT)
+var orgRoleHierarchy = map[string]int{
+	"Member": 10,
+	"Admin":  20,
+	"Owner":  30,
+}
+
+var projectRoleHierarchy = map[string]int{
+	"Viewer": 10,
+	"Editor": 20,
+	"Admin":  30,
+}
+
+func hasSufficientOrgRole(userRole, requiredRole string) bool {
+	return orgRoleHierarchy[userRole] >= orgRoleHierarchy[requiredRole]
+}
+
+func hasSufficientProjectRole(userRole, requiredRole string) bool {
+	return projectRoleHierarchy[userRole] >= projectRoleHierarchy[requiredRole]
+}
+
+// --- Middleware ---
+
+// RequireAuth checks for a valid user session (JWT) and injects user_id into locals.
 func (m *AuthMiddleware) RequireAuth(c *fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if authHeader == "" {
@@ -58,8 +81,6 @@ func (m *AuthMiddleware) RequireAuth(c *fiber.Ctx) error {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized: Invalid claims"})
 	}
 
-	// Inject user_id into locals
-	// claims["user_id"] is float64 in JSON
 	userID, ok := claims["user_id"].(string)
 	if !ok {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized: Invalid user ID format in token"})
@@ -69,89 +90,88 @@ func (m *AuthMiddleware) RequireAuth(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-// RequireProjectAccess ensures user has a specific role in the project
-// Role levels: Viewer (1), Editor (2), Admin (3)
-// For simplicity, we just pass the minimum role string and check equivalence or map to int
-func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		userID := c.Locals("user_id") // Assumes RequireAuth ran first
-		if userID == nil {
-			return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-		}
-
-		projectIDStr := c.Get("x-project-id")
-		if projectIDStr == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Missing x-project-id header"})
-		}
-
-		projectID := projectIDStr // IDs are now strings
-
-		var member database.ProjectMember
-		if err := m.DB.Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
-			return c.Status(403).JSON(fiber.Map{"error": "Access denied to project"})
-		}
-
-		// Simple Role Check
-		if !hasSufficientRole(member.Role, minRole) {
-			return c.Status(403).JSON(fiber.Map{"error": "Insufficient permissions"})
-		}
-
-		// Inject project context
-		c.Locals("project_id", projectID)
-		return c.Next()
-	}
-}
-
-// RequireOrgAccess ensures user has a specific role in the organization
+// RequireOrgAccess checks if the user has at least `minRole` in the organization (:org_id param).
+// It also injects org_id and org_role into locals.
 func (m *AuthMiddleware) RequireOrgAccess(minRole string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		userID := c.Locals("user_id") // Assumes RequireAuth ran first
-		if userID == nil {
+		userID, ok := c.Locals("user_id").(string)
+		if !ok || userID == "" {
 			return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 		}
 
-		orgIDStr := c.Params("org_id")
-		if orgIDStr == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Missing org_id param"})
+		orgID := c.Params("org_id")
+		if orgID == "" {
+			orgID, _ = c.Locals("org_id").(string)
 		}
-
-		orgID := orgIDStr // IDs are now strings
+		if orgID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Missing organization context"})
+		}
 
 		var member database.OrganizationMember
 		if err := m.DB.Where("organization_id = ? AND user_id = ?", orgID, userID).First(&member).Error; err != nil {
-			return c.Status(403).JSON(fiber.Map{"error": "Access denied to organization"})
+			return c.Status(403).JSON(fiber.Map{"error": "You are not a member of this organization"})
 		}
 
-		// Role Check
 		if !hasSufficientOrgRole(member.Role, minRole) {
-			return c.Status(403).JSON(fiber.Map{"error": "Insufficient permissions"})
+			return c.Status(403).JSON(fiber.Map{
+				"error": fmt.Sprintf("Insufficient permissions. Required: %s, your role: %s", minRole, member.Role),
+			})
 		}
 
-		// Inject org context
 		c.Locals("org_id", orgID)
+		c.Locals("org_role", member.Role)
 		return c.Next()
 	}
 }
 
-func hasSufficientRole(userRole, requiredRole string) bool {
-	roles := map[string]int{
-		"Viewer": 1,
-		"Editor": 2,
-		"Admin":  3,
-	}
-	// "Owner" maps to Admin for project access if not explicitly defined
-	if userRole == "Owner" {
-		userRole = "Admin"
-	}
+// RequireProjectAccess checks if the user has at least `minRole` in the current project.
+// The project ID must be provided via the x-project-id header.
+// Org Owners/Admins bypass the project member check (they implicitly have Admin-level access).
+func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		userID, ok := c.Locals("user_id").(string)
+		if !ok || userID == "" {
+			return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+		}
 
-	return roles[userRole] >= roles[requiredRole]
-}
+		projectID := c.Get("x-project-id")
+		if projectID == "" {
+			// Also check locals (in case it was set by a preceding middleware)
+			projectID, _ = c.Locals("project_id").(string)
+		}
+		if projectID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Missing x-project-id header"})
+		}
 
-func hasSufficientOrgRole(userRole, requiredRole string) bool {
-	roles := map[string]int{
-		"Member": 1,
-		"Admin":  2,
-		"Owner":  3,
+		// --- Org-Owner bypass ---
+		// If the user is an Owner or Admin of the org that owns this project,
+		// grant them implicit Admin-level project access.
+		var project database.Project
+		if err := m.DB.Select("organization_id").Where("id = ?", projectID).First(&project).Error; err == nil {
+			var orgMember database.OrganizationMember
+			if m.DB.Where("organization_id = ? AND user_id = ?", project.OrganizationID, userID).First(&orgMember).Error == nil {
+				if orgMember.Role == "Owner" || orgMember.Role == "Admin" {
+					c.Locals("project_id", projectID)
+					c.Locals("project_role", orgMember.Role) // use org role as effective project role
+					return c.Next()
+				}
+			}
+		}
+
+		// --- Normal Project Member check ---
+		var member database.ProjectMember
+		if err := m.DB.Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Access denied: you are not a member of this project"})
+		}
+
+		if !hasSufficientProjectRole(member.Role, minRole) {
+			return c.Status(403).JSON(fiber.Map{
+				"error": fmt.Sprintf("Insufficient permissions. Required: %s, your role: %s", minRole, member.Role),
+			})
+		}
+
+		c.Locals("project_id", projectID)
+		c.Locals("project_role", member.Role)
+		return c.Next()
 	}
-	return roles[userRole] >= roles[requiredRole]
 }

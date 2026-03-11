@@ -259,21 +259,27 @@ func main() {
 	widgetsHandler := api.NewWidgetsHandler(db, chConn)                      // Widgets
 	middleware := middleware.NewAuthMiddleware(db, API_SECRET)
 
+	// --- RBAC MIDDLEWARE SHORTCUTS ---
+	// These are pre-built middleware handlers that can be embedded directly in route registration.
+	requireEditor := middleware.RequireProjectAccess("Editor")
+	requireAdmin := middleware.RequireProjectAccess("Admin")
+
 	authHandler.RegisterRoutes(apiRouter)
 
 	// Protected Routes
-	// protected := apiRouter.Group("/") // REMOVED: Capture-all group caused issues
-	// protected.Use(middleware.RequireAuth)
+	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth, requireEditor, requireAdmin)
 
-	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth)
-	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Events under /api/v1/events
-	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Lexicon under /api/v1/lexicon
-	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Funnels under /api/v1/projects/:id/funnels
-	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)      // Flows under /api/v1/projects/:id/flows
-	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Insights under /api/v1/projects/:id/insights
-	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Retentions under /api/v1/projects/:id/retentions
-	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Boards under /api/v1/boards
-	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Widgets under /api/v1/widgets
+	// Data read routes: Viewer+
+	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)        // Events under /api/v1/events
+	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth)       // Lexicon under /api/v1/lexicon
+
+	// Analysis routes: Read= Viewer+, Write=Editor+
+	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)        // Funnels under /api/v1/funnels
+	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)          // Flows under /api/v1/flows
+	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)       // Insights under /api/v1/insights
+	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Retentions under /api/v1/retentions
+	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)         // Boards under /api/v1/boards
+	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth)        // Widgets under /api/v1/widgets
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
@@ -285,16 +291,16 @@ func main() {
 	// (SAML, Advanced RBAC, Audit Logs, etc.) when compiled with `-tags enterprise`.
 	registry.InitializeAll(app, db, chConn, v1)
 
-	// Cohorts
+	// Cohorts — Read: Viewer+, Write: Editor+
 	cohortsHandler := api.NewCohortsHandler(db, chConn)
-	v1.Post("/cohorts", middleware.RequireAuth, cohortsHandler.CreateCohort)
 	v1.Get("/cohorts", middleware.RequireAuth, cohortsHandler.ListCohorts)
-	v1.Post("/cohorts/preview", middleware.RequireAuth, cohortsHandler.PreviewCohort)
 	v1.Get("/cohorts/:id", middleware.RequireAuth, cohortsHandler.GetCohort)
-	v1.Put("/cohorts/:id", middleware.RequireAuth, cohortsHandler.UpdateCohort)
-	v1.Delete("/cohorts/:id", middleware.RequireAuth, cohortsHandler.DeleteCohort)
-	v1.Post("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.AddMembers)
-	v1.Delete("/cohorts/:id/members", middleware.RequireAuth, cohortsHandler.RemoveMembers)
+	v1.Post("/cohorts", middleware.RequireAuth, requireEditor, cohortsHandler.CreateCohort)
+	v1.Post("/cohorts/preview", middleware.RequireAuth, requireEditor, cohortsHandler.PreviewCohort)
+	v1.Put("/cohorts/:id", middleware.RequireAuth, requireEditor, cohortsHandler.UpdateCohort)
+	v1.Delete("/cohorts/:id", middleware.RequireAuth, requireEditor, cohortsHandler.DeleteCohort)
+	v1.Post("/cohorts/:id/members", middleware.RequireAuth, requireEditor, cohortsHandler.AddMembers)
+	v1.Delete("/cohorts/:id/members", middleware.RequireAuth, requireEditor, cohortsHandler.RemoveMembers)
 
 	apiRouter.Post("/orgs", middleware.RequireAuth, orgHandler.CreateOrganization)
 	apiRouter.Post("/upload", middleware.RequireAuth, api.UploadHandler) // Upload Endpoint

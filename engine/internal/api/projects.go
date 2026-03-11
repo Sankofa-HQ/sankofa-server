@@ -25,20 +25,23 @@ func NewProjectHandler(db *gorm.DB, ch driver.Conn) *ProjectHandler {
 	return &ProjectHandler{DB: db, CH: ch}
 }
 
-func (h *ProjectHandler) RegisterRoutes(api fiber.Router, authMiddleware fiber.Handler) {
+func (h *ProjectHandler) RegisterRoutes(api fiber.Router, authMiddleware fiber.Handler, requireEditor fiber.Handler, requireAdmin fiber.Handler) {
 	projects := api.Group("/projects", authMiddleware)
-	projects.Get("/", h.GetProjects) // ?org_id=1
-	projects.Post("/", h.CreateProject)
-	projects.Put("/:id", h.UpdateProject) // ?org_id=1
-	projects.Delete("/:id", h.DeleteProject)
-	projects.Post("/:id/reset-key", h.ResetProjectKey)
+	projects.Get("/", h.GetProjects) // Any authenticated user can list
 
-	// Access Roles endpoints
-	projects.Get("/:id/access", h.GetProjectAccess)
-	projects.Post("/:id/teams", h.AddProjectTeam)
-	projects.Delete("/:id/teams/:team_id", h.RemoveProjectTeam)
-	projects.Post("/:id/members", h.AddProjectMember)
-	projects.Delete("/:id/members/:user_id", h.RemoveProjectMember)
+	// Admin-only project mutations
+	projectAdmin := projects.Group("/", requireAdmin)
+	projectAdmin.Post("/", h.CreateProject)
+	projectAdmin.Put("/:id", h.UpdateProject)
+	projectAdmin.Delete("/:id", h.DeleteProject)
+	projectAdmin.Post("/:id/reset-key", h.ResetProjectKey)
+
+	// Admin-only membership management
+	projectAdmin.Get("/:id/access", h.GetProjectAccess)
+	projectAdmin.Post("/:id/teams", h.AddProjectTeam)
+	projectAdmin.Delete("/:id/teams/:team_id", h.RemoveProjectTeam)
+	projectAdmin.Post("/:id/members", h.AddProjectMember)
+	projectAdmin.Delete("/:id/members/:user_id", h.RemoveProjectMember)
 
 	orgs := api.Group("/organizations", authMiddleware)
 	orgs.Get("/", h.GetOrganizations)

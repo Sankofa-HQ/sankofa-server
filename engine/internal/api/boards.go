@@ -67,9 +67,42 @@ func getProjectFromContext(c *fiber.Ctx, db *gorm.DB, userID string) (*database.
 		return nil, c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
 
+	// Access check: user must be either a direct project member OR have at
+	// least one board share in this project (shared dashboards access pattern).
 	var member database.ProjectMember
-	if err := db.First(&member, "project_id = ? AND user_id = ?", project.ID, userID).Error; err != nil {
-		return nil, c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	isMember := db.Where("project_id = ? AND user_id = ?", project.ID, userID).First(&member).Error == nil
+
+	if !isMember {
+		// Check if the user has any board-level share access in this project
+		var shareCount int64
+		db.Model(&database.BoardShare{}).
+			Joins("JOIN boards ON boards.id = board_shares.board_id").
+			Where("boards.project_id = ? AND board_shares.shared_with_type = 'user' AND board_shares.shared_with_id = ?", project.ID, userID).
+			Count(&shareCount)
+
+		if shareCount == 0 {
+			// Also check team-based shares
+			var teamIDs []string
+			db.Model(&database.TeamMember{}).Where("user_id = ?", userID).Pluck("team_id", &teamIDs)
+			if len(teamIDs) > 0 {
+				db.Model(&database.BoardShare{}).
+					Joins("JOIN boards ON boards.id = board_shares.board_id").
+					Where("boards.project_id = ? AND board_shares.shared_with_type = 'team' AND board_shares.shared_with_id IN ?", project.ID, teamIDs).
+					Count(&shareCount)
+			}
+		}
+
+		if shareCount == 0 {
+			// Check project-wide board shares
+			var projectShareCount int64
+			db.Model(&database.BoardShare{}).
+				Joins("JOIN boards ON boards.id = board_shares.board_id").
+				Where("boards.project_id = ? AND board_shares.shared_with_type = 'project' AND board_shares.shared_with_id = ?", project.ID, project.ID).
+				Count(&projectShareCount)
+			if projectShareCount == 0 {
+				return nil, c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+			}
+		}
 	}
 
 	return &project, nil
@@ -118,8 +151,7 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 		return err
 	}
 
-	var boards []database.Board
-
+	// ── 1. System board (auto-create if missing) ──────────────────────────
 	var defaultBoard database.Board
 	if err := h.DB.Where("project_id = ? AND is_system = ?", project.ID, true).First(&defaultBoard).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -137,17 +169,106 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := h.DB.Preload("Widgets").Preload("CreatedBy").Where("project_id = ? AND created_by_id = ?", project.ID, userID).Order("is_system DESC, created_at ASC").Find(&boards).Error; err != nil {
+	// ── 2. Own boards ─────────────────────────────────────────────────────
+	var ownBoards []database.Board
+	if err := h.DB.Preload("Widgets").Preload("CreatedBy").
+		Where("project_id = ? AND created_by_id = ?", project.ID, userID).
+		Order("is_system DESC, created_at ASC").
+		Find(&ownBoards).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch boards"})
 	}
 
-	// Also include system boards if not already in the list
+	// Include system boards created by others (e.g. first user created the system board)
 	var systemBoards []database.Board
-	if err := h.DB.Preload("Widgets").Preload("CreatedBy").Where("project_id = ? AND is_system = ? AND created_by_id != ?", project.ID, true, userID).Find(&systemBoards).Error; err == nil {
-		boards = append(systemBoards, boards...)
+	if err := h.DB.Preload("Widgets").Preload("CreatedBy").
+		Where("project_id = ? AND is_system = ? AND created_by_id != ?", project.ID, true, userID).
+		Find(&systemBoards).Error; err == nil {
+		ownBoards = append(systemBoards, ownBoards...)
 	}
 
-	return c.JSON(fiber.Map{"boards": boards})
+	// ── 3. Boards shared with this user (via user, team, or project) ──────
+	// Collect shared board IDs
+	sharedIDSet := make(map[string]string) // boardID -> "user"|"team"|"project"
+
+	// Direct user shares
+	var userShareBoardIDs []string
+	h.DB.Model(&database.BoardShare{}).
+		Joins("JOIN boards ON boards.id = board_shares.board_id").
+		Where("board_shares.shared_with_type = 'user' AND board_shares.shared_with_id = ? AND boards.project_id = ?", userID, project.ID).
+		Pluck("board_shares.board_id", &userShareBoardIDs)
+	for _, id := range userShareBoardIDs {
+		sharedIDSet[id] = "user"
+	}
+
+	// Team shares
+	var teamIDs []string
+	h.DB.Model(&database.TeamMember{}).Where("user_id = ?", userID).Pluck("team_id", &teamIDs)
+	if len(teamIDs) > 0 {
+		var teamShareBoardIDs []string
+		h.DB.Model(&database.BoardShare{}).
+			Joins("JOIN boards ON boards.id = board_shares.board_id").
+			Where("board_shares.shared_with_type = 'team' AND board_shares.shared_with_id IN ? AND boards.project_id = ?", teamIDs, project.ID).
+			Pluck("board_shares.board_id", &teamShareBoardIDs)
+		for _, id := range teamShareBoardIDs {
+			if _, exists := sharedIDSet[id]; !exists {
+				sharedIDSet[id] = "team"
+			}
+		}
+	}
+
+	// Project-wide shares
+	var projectShareBoardIDs []string
+	h.DB.Model(&database.BoardShare{}).
+		Joins("JOIN boards ON boards.id = board_shares.board_id").
+		Where("board_shares.shared_with_type = 'project' AND board_shares.shared_with_id = ? AND boards.project_id = ?", project.ID, project.ID).
+		Pluck("board_shares.board_id", &projectShareBoardIDs)
+	for _, id := range projectShareBoardIDs {
+		if _, exists := sharedIDSet[id]; !exists {
+			sharedIDSet[id] = "project"
+		}
+	}
+
+	// Remove boards the user already owns
+	ownBoardIDSet := make(map[string]bool)
+	for _, b := range ownBoards {
+		ownBoardIDSet[b.ID] = true
+	}
+
+	type BoardWithMeta struct {
+		database.Board
+		Permission string `json:"permission,omitempty"`
+		SharedVia  string `json:"shared_via,omitempty"`
+	}
+
+	var result []BoardWithMeta
+	for _, b := range ownBoards {
+		result = append(result, BoardWithMeta{Board: b})
+	}
+
+	if len(sharedIDSet) > 0 {
+		var sharedIDs []string
+		for id := range sharedIDSet {
+			if !ownBoardIDSet[id] {
+				sharedIDs = append(sharedIDs, id)
+			}
+		}
+		if len(sharedIDs) > 0 {
+			var sharedBoards []database.Board
+			h.DB.Preload("Widgets").Preload("CreatedBy").
+				Where("id IN ?", sharedIDs).
+				Find(&sharedBoards)
+			for _, b := range sharedBoards {
+				perm := h.getBoardPermissionLevel(userID, &b)
+				result = append(result, BoardWithMeta{
+					Board:      b,
+					Permission: perm,
+					SharedVia:  sharedIDSet[b.ID],
+				})
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{"boards": result})
 }
 
 func (h *BoardsHandler) GetBoard(c *fiber.Ctx) error {
