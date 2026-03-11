@@ -233,6 +233,13 @@ func main() {
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	}))
 
+	// Health check endpoint
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.Status(200).JSON(fiber.Map{
+			"status": "ok",
+		})
+	})
+
 	apiRouter := app.Group("/api")
 	v1 := apiRouter.Group("/v1")
 
