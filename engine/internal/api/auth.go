@@ -33,6 +33,10 @@ func (h *AuthHandler) RegisterRoutes(api fiber.Router) {
 	auth.Get("/me", h.Me)
 	auth.Put("/me", h.UpdateMe)
 	auth.Put("/password", h.UpdatePassword)
+	auth.Post("/forgot-password", h.ForgotPassword)
+	auth.Post("/reset-password", h.ResetPassword)
+	auth.Post("/send-verification", h.SendVerification)
+	auth.Get("/verify-email", h.VerifyEmail)
 }
 
 // Helper to extract user ID from token
@@ -178,18 +182,25 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 	tx := h.DB.Begin()
 
-	// 3. Create User
+	// 3. Create User with email verification token
+	verifyToken := generateSecureToken()
 	user := database.User{
-		Email:        req.Email,
-		PasswordHash: string(hashedPassword),
-		FullName:     req.FullName,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		Email:            req.Email,
+		PasswordHash:     string(hashedPassword),
+		FullName:         req.FullName,
+		EmailVerified:    false,
+		EmailVerifyToken: verifyToken,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 	if err := tx.Create(&user).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
 	}
+
+	// Log verification link (TODO: send via Resend/SMTP)
+	verifyURL := fmt.Sprintf("http://localhost:3000/verify-email?token=%s", verifyToken)
+	log.Printf("📧 Email verification link for %s: %s", req.Email, verifyURL)
 
 	var orgID string
 	if req.InviteToken == "" {
@@ -375,4 +386,123 @@ func generateJWT(userID string, email string) (string, error) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)
+}
+
+func generateSecureToken() string {
+	bytes := make([]byte, 32)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
+
+// ForgotPassword - POST /api/auth/forgot-password
+func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
+	type Req struct {
+		Email string `json:"email"`
+	}
+	var req Req
+	if err := c.BodyParser(&req); err != nil || req.Email == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Email is required"})
+	}
+
+	var user database.User
+	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+		// Don't reveal if email exists — always return success
+		return c.JSON(fiber.Map{"status": "ok", "message": "If an account with that email exists, a reset link has been sent."})
+	}
+
+	// Generate reset token
+	token := generateSecureToken()
+	user.PasswordResetToken = token
+	user.PasswordResetExp = time.Now().Add(1 * time.Hour) // 1 hour expiry
+	h.DB.Save(&user)
+
+	// TODO: Send email via Resend/SMTP. For now, log the link.
+	resetURL := fmt.Sprintf("http://localhost:3000/reset-password?token=%s", token)
+	log.Printf("🔑 Password reset link for %s: %s", req.Email, resetURL)
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "If an account with that email exists, a reset link has been sent."})
+}
+
+// ResetPassword - POST /api/auth/reset-password
+func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
+	type Req struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"new_password"`
+	}
+	var req Req
+	if err := c.BodyParser(&req); err != nil || req.Token == "" || req.NewPassword == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Token and new password are required"})
+	}
+
+	if len(req.NewPassword) < 8 {
+		return c.Status(400).JSON(fiber.Map{"error": "Password must be at least 8 characters"})
+	}
+
+	var user database.User
+	if err := h.DB.Where("password_reset_token = ?", req.Token).First(&user).Error; err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid or expired reset token"})
+	}
+
+	if time.Now().After(user.PasswordResetExp) {
+		return c.Status(400).JSON(fiber.Map{"error": "Reset token has expired"})
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+
+	user.PasswordHash = string(hashedPassword)
+	user.PasswordResetToken = ""
+	user.UpdatedAt = time.Now()
+	h.DB.Save(&user)
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Password has been reset successfully"})
+}
+
+// SendVerification - POST /api/auth/send-verification
+func (h *AuthHandler) SendVerification(c *fiber.Ctx) error {
+	userID, err := h.extractUserFromToken(c)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+
+	var user database.User
+	if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	if user.EmailVerified {
+		return c.JSON(fiber.Map{"status": "ok", "message": "Email already verified"})
+	}
+
+	token := generateSecureToken()
+	user.EmailVerifyToken = token
+	h.DB.Save(&user)
+
+	// TODO: Send email via Resend/SMTP. For now, log the link.
+	verifyURL := fmt.Sprintf("http://localhost:3000/verify-email?token=%s", token)
+	log.Printf("📧 Email verification link for %s: %s", user.Email, verifyURL)
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Verification email sent"})
+}
+
+// VerifyEmail - GET /api/auth/verify-email?token=...
+func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {
+	token := c.Query("token")
+	if token == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Token is required"})
+	}
+
+	var user database.User
+	if err := h.DB.Where("email_verify_token = ?", token).First(&user).Error; err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid verification token"})
+	}
+
+	user.EmailVerified = true
+	user.EmailVerifyToken = ""
+	user.UpdatedAt = time.Now()
+	h.DB.Save(&user)
+
+	return c.JSON(fiber.Map{"status": "ok", "message": "Email verified successfully", "verified": true})
 }

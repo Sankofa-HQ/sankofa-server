@@ -10,15 +10,19 @@ import (
 
 // User represents a login (email/password).
 type User struct {
-	ID               string    `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	Email            string    `gorm:"uniqueIndex;not null" json:"email"`
-	PasswordHash     string    `json:"-"` // Not exposed in JSON
-	FullName         string    `json:"full_name"`
-	AvatarURL        string    `json:"avatar_url"`
-	CurrentProjectID *string   `json:"current_project_id" gorm:"type:varchar(32)"` // Nullable
-	CurrentProject   *Project  `json:"current_project" gorm:"foreignKey:CurrentProjectID"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                 string    `gorm:"primaryKey;type:varchar(32)" json:"id"`
+	Email              string    `gorm:"uniqueIndex;not null" json:"email"`
+	PasswordHash       string    `json:"-"` // Not exposed in JSON
+	FullName           string    `json:"full_name"`
+	AvatarURL          string    `json:"avatar_url"`
+	CurrentProjectID   *string   `json:"current_project_id" gorm:"type:varchar(32)"` // Nullable
+	CurrentProject     *Project  `json:"current_project" gorm:"foreignKey:CurrentProjectID"`
+	EmailVerified      bool      `json:"email_verified" gorm:"default:false"`
+	EmailVerifyToken   string    `json:"-" gorm:"type:varchar(64)"`
+	PasswordResetToken string    `json:"-" gorm:"type:varchar(64)"`
+	PasswordResetExp   time.Time `json:"-"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func (u *User) BeforeCreate(tx *gorm.DB) (err error) {
