@@ -116,28 +116,28 @@ func (h *BoardsHandler) getBoardPermissionLevel(userID string, board *database.B
 	}
 
 	// Direct user share
-	var directShare database.BoardShare
-	if err := h.DB.Where("board_id = ? AND shared_with_type = 'user' AND shared_with_id = ?", board.ID, userID).First(&directShare).Error; err == nil {
-		return directShare.Permission
+	var directShare []database.BoardShare
+	if err := h.DB.Limit(1).Where("board_id = ? AND shared_with_type = 'user' AND shared_with_id = ?", board.ID, userID).Find(&directShare).Error; err == nil && len(directShare) > 0 {
+		return directShare[0].Permission
 	}
 
 	// Team share — check if user is a member of any team that has access
 	var teamShares []database.BoardShare
 	if err := h.DB.Where("board_id = ? AND shared_with_type = 'team'", board.ID).Find(&teamShares).Error; err == nil {
 		for _, ts := range teamShares {
-			var tm database.TeamMember
-			if err := h.DB.Where("team_id = ? AND user_id = ?", ts.SharedWithID, userID).First(&tm).Error; err == nil {
+			var tm []database.TeamMember
+			if err := h.DB.Limit(1).Where("team_id = ? AND user_id = ?", ts.SharedWithID, userID).Find(&tm).Error; err == nil && len(tm) > 0 {
 				return ts.Permission
 			}
 		}
 	}
 
 	// Project-wide share — check if user is a member of the project
-	var projectShare database.BoardShare
-	if err := h.DB.Where("board_id = ? AND shared_with_type = 'project' AND shared_with_id = ?", board.ID, board.ProjectID).First(&projectShare).Error; err == nil {
-		var pm database.ProjectMember
-		if err := h.DB.Where("project_id = ? AND user_id = ?", board.ProjectID, userID).First(&pm).Error; err == nil {
-			return projectShare.Permission
+	var projectShare []database.BoardShare
+	if err := h.DB.Limit(1).Where("board_id = ? AND shared_with_type = 'project' AND shared_with_id = ?", board.ID, board.ProjectID).Find(&projectShare).Error; err == nil && len(projectShare) > 0 {
+		var pm []database.ProjectMember
+		if err := h.DB.Limit(1).Where("project_id = ? AND user_id = ?", board.ProjectID, userID).Find(&pm).Error; err == nil && len(pm) > 0 {
+			return projectShare[0].Permission
 		}
 	}
 
