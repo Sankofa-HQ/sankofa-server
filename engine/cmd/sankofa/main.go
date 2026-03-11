@@ -834,6 +834,7 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	project := database.Project{
 		OrganizationID: org.ID,
 		Name:           ADMIN_PROJECT_NAME,
+		CreatedByID:    admin.ID,
 		APIKey:         "sk_live_admin_key",
 		TestAPIKey:     "sk_test_admin_key",
 		Timezone:       "UTC",

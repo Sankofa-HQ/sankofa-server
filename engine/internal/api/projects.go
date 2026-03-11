@@ -183,7 +183,7 @@ func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
 		APIKey:         apiKey,
 		TestAPIKey:     testApiKey,
 		Timezone:       "UTC", // Default
-		Region:         "us-east-1",
+		Region:         "eu-central-1",
 		CreatedByID:    userID,
 		Environment:    "test",
 		CreatedAt:      time.Now(),

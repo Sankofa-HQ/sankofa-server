@@ -100,7 +100,7 @@ func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
 
 	// Defaults
 	if req.Region == "" {
-		req.Region = "us-east-1"
+		req.Region = "eu-central-1"
 	}
 
 	tx := h.DB.Begin()
@@ -287,7 +287,7 @@ func (h *OrganizationHandler) CreateProject(c *fiber.Ctx) error {
 
 	// Defaults
 	if req.Region == "" {
-		req.Region = "us-east-1"
+		req.Region = "eu-central-1"
 	}
 	if req.Timezone == "" {
 		req.Timezone = "UTC"

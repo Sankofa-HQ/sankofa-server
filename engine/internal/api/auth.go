@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gosimple/slug"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -222,12 +223,16 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 		// 6. Create Default Project
 		apiKey, _ := generateAPIKey()
+		testApiKey, _ := generateTestAPIKey()
 		project := database.Project{
 			OrganizationID: org.ID,
-			Name:           "Production", // Default name
+			Name:           req.OrganizationName + " Project",
 			APIKey:         apiKey,
+			TestAPIKey:     testApiKey,
+			CreatedByID:    user.ID,
+			Environment:    "live",
 			Timezone:       "UTC",
-			Region:         "us-east-1",
+			Region:         "eu-central-1",
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		}
@@ -340,7 +345,9 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 // Helpers
 
 func generateSlug(name string) string {
-	return slug.Make(name)
+	base := slug.Make(name)
+	suffix, _ := gonanoid.New(6)
+	return base + "-" + suffix
 }
 
 func generateAPIKey() (string, error) {
