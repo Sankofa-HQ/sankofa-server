@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"sankofa/engine/internal/database"
+	"sankofa/engine/internal/email"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gofiber/fiber/v2"
@@ -18,12 +19,13 @@ import (
 )
 
 type OrganizationHandler struct {
-	DB *gorm.DB
-	CH driver.Conn
+	DB    *gorm.DB
+	CH    driver.Conn
+	Email *email.EmailManager
 }
 
-func NewOrganizationHandler(db *gorm.DB, ch driver.Conn) *OrganizationHandler {
-	return &OrganizationHandler{DB: db, CH: ch}
+func NewOrganizationHandler(db *gorm.DB, ch driver.Conn, emailManager *email.EmailManager) *OrganizationHandler {
+	return &OrganizationHandler{DB: db, CH: ch, Email: emailManager}
 }
 
 func (h *OrganizationHandler) RegisterRoutes(router fiber.Router) {
@@ -433,10 +435,31 @@ func (h *OrganizationHandler) InviteMember(c *fiber.Ctx) error {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create invite"})
 	}
 
-	// TODO: Integrate actual email service here
-	// Mock email log
-	inviteLink := fmt.Sprintf("%s/invite?token=%s", "http://localhost:3000", invite.Token)
-	log.Printf("📧 MOCK EMAIL: Sending invite to %s. Link: %s\n", req.Email, inviteLink)
+	// Get inviter details
+	inviterID, _ := c.Locals("user_id").(string)
+	var inviter database.User
+	h.DB.First(&inviter, "id = ?", inviterID)
+
+	inviterName := inviter.Email
+	if inviterName == "" {
+		inviterName = "A team member"
+	}
+
+	// Get organization details
+	var org database.Organization
+	h.DB.First(&org, "id = ?", orgID)
+
+	// Send email
+	if h.Email != nil {
+		go func() {
+			if err := h.Email.SendInviteEmail(req.Email, inviterName, org.Name, invite.Token); err != nil {
+				log.Printf("❌ Failed to send invite email to %s: %v", req.Email, err)
+			}
+		}()
+	} else {
+		inviteLink := fmt.Sprintf("%s/invite?token=%s", "http://localhost:3000", invite.Token)
+		log.Printf("📧 MOCK EMAIL: Sending invite to %s for org %s. Link: %s\n", req.Email, org.Name, inviteLink)
+	}
 
 	return c.JSON(fiber.Map{
 		"status": "invite_sent",

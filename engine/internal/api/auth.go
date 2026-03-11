@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"sankofa/engine/internal/database"
+	"sankofa/engine/internal/email"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
@@ -19,11 +20,12 @@ import (
 
 // AuthHandler holds dependencies for auth routes
 type AuthHandler struct {
-	DB *gorm.DB
+	DB    *gorm.DB
+	Email *email.EmailManager
 }
 
-func NewAuthHandler(db *gorm.DB) *AuthHandler {
-	return &AuthHandler{DB: db}
+func NewAuthHandler(db *gorm.DB, emailManager *email.EmailManager) *AuthHandler {
+	return &AuthHandler{DB: db, Email: emailManager}
 }
 
 func (h *AuthHandler) RegisterRoutes(api fiber.Router) {
@@ -416,9 +418,17 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 	user.PasswordResetExp = time.Now().Add(1 * time.Hour) // 1 hour expiry
 	h.DB.Save(&user)
 
-	// TODO: Send email via Resend/SMTP. For now, log the link.
-	resetURL := fmt.Sprintf("http://localhost:3000/reset-password?token=%s", token)
-	log.Printf("🔑 Password reset link for %s: %s", req.Email, resetURL)
+	// Send email
+	if h.Email != nil {
+		go func() {
+			if err := h.Email.SendPasswordResetEmail(user.Email, token); err != nil {
+				log.Printf("❌ Failed to send password reset email to %s: %v", user.Email, err)
+			}
+		}()
+	} else {
+		resetURL := fmt.Sprintf("%s/reset-password?token=%s", "http://localhost:3000", token)
+		log.Printf("🔑 MOCK EMAIL: Password reset link for %s: %s", req.Email, resetURL)
+	}
 
 	return c.JSON(fiber.Map{"status": "ok", "message": "If an account with that email exists, a reset link has been sent."})
 }
@@ -480,9 +490,17 @@ func (h *AuthHandler) SendVerification(c *fiber.Ctx) error {
 	user.EmailVerifyToken = token
 	h.DB.Save(&user)
 
-	// TODO: Send email via Resend/SMTP. For now, log the link.
-	verifyURL := fmt.Sprintf("http://localhost:3000/verify-email?token=%s", token)
-	log.Printf("📧 Email verification link for %s: %s", user.Email, verifyURL)
+	// Send email
+	if h.Email != nil {
+		go func() {
+			if err := h.Email.SendVerificationEmail(user.Email, token); err != nil {
+				log.Printf("❌ Failed to send verification email to %s: %v", user.Email, err)
+			}
+		}()
+	} else {
+		verifyURL := fmt.Sprintf("%s/verify-email?token=%s", "http://localhost:3000", token)
+		log.Printf("📧 MOCK EMAIL: Verification link for %s: %s", user.Email, verifyURL)
+	}
 
 	return c.JSON(fiber.Map{"status": "ok", "message": "Verification email sent"})
 }

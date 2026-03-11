@@ -15,6 +15,7 @@ import (
 	"sankofa/engine/internal/middleware"
 	"sankofa/engine/internal/registry"
 	"sankofa/engine/internal/utils"
+	"sankofa/engine/internal/email"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -236,9 +237,10 @@ func main() {
 	v1 := apiRouter.Group("/v1")
 
 	// HANDLERS
-	authHandler := api.NewAuthHandler(db)
+	emailManager := email.NewManager()
+	authHandler := api.NewAuthHandler(db, emailManager)
 	projectHandler := api.NewProjectHandler(db, chConn)
-	orgHandler := api.NewOrganizationHandler(db, chConn)                     // New
+	orgHandler := api.NewOrganizationHandler(db, chConn, emailManager) // New
 	eventsHandler := api.NewEventsHandler(db, chConn)                        // Events
 	peopleHandler := api.NewPeopleHandler(db, chConn)                        // People
 	lexiconHandler := api.NewLexiconHandler(db, chConn)                      // Lexicon
