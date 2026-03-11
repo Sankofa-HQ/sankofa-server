@@ -146,7 +146,7 @@ type TemplateData struct {
 
 func (m *EmailManager) renderTemplate(tmplString string, data TemplateData) (string, error) {
 	data.FrontendURL = m.frontendURL
-	data.LogoURL = fmt.Sprintf("%s/logo-icon.png", m.frontendURL) // Ensure you have a PNG logo in public folder
+	data.LogoURL = fmt.Sprintf("%s/icon.png", m.frontendURL) // Ensure you have a PNG logo in public folder
 
 	t, err := template.New("email").Parse(tmplString)
 	if err != nil {
