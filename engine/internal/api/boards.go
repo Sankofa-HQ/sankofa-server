@@ -238,11 +238,14 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 		database.Board
 		Permission string `json:"permission,omitempty"`
 		SharedVia  string `json:"shared_via,omitempty"`
+		ShareCount int64  `json:"share_count"`
 	}
 
 	var result []BoardWithMeta
 	for _, b := range ownBoards {
-		result = append(result, BoardWithMeta{Board: b})
+		var shareCount int64
+		h.DB.Model(&database.BoardShare{}).Where("board_id = ?", b.ID).Count(&shareCount)
+		result = append(result, BoardWithMeta{Board: b, ShareCount: shareCount})
 	}
 
 	if len(sharedIDSet) > 0 {
