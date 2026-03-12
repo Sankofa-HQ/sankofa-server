@@ -12,10 +12,10 @@ import (
 
 	"sankofa/engine/internal/api"
 	"sankofa/engine/internal/database"
+	"sankofa/engine/internal/email"
 	"sankofa/engine/internal/middleware"
 	"sankofa/engine/internal/registry"
 	"sankofa/engine/internal/utils"
-	"sankofa/engine/internal/email"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -45,6 +45,8 @@ var (
 	ADMIN_ORG_NAME       string
 	ADMIN_PROJECT_NAME   string
 	GEOIP_DB_PATH        string
+	ROOT_REDIRECT_URL    string
+	FRONTEND_URL         string
 
 	// B2 Configuration
 	B2_KEY_ID      string
@@ -76,6 +78,8 @@ func loadConfig() {
 	ADMIN_ORG_NAME = getEnv("ADMIN_ORG_NAME", "Sankofa Admin Org")
 	ADMIN_PROJECT_NAME = getEnv("ADMIN_PROJECT_NAME", "Sankofa Internal")
 	GEOIP_DB_PATH = getEnv("GEOIP_DB_PATH", "")
+	ROOT_REDIRECT_URL = getEnv("ROOT_REDIRECT_URL", "")
+	FRONTEND_URL = getEnv("FRONTEND_URL", "http://localhost:3000")
 
 	B2_KEY_ID = getEnv("B2_KEY_ID", "")
 	B2_APP_KEY = getEnv("B2_APP_KEY", "")
@@ -232,6 +236,17 @@ func main() {
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	}))
 
+	// Redirect root API visits to the configured landing/docs page, or fallback to frontend
+	app.Get("/", func(c *fiber.Ctx) error {
+		if ROOT_REDIRECT_URL != "" {
+			return c.Redirect(ROOT_REDIRECT_URL, fiber.StatusMovedPermanently)
+		}
+		if FRONTEND_URL != "" {
+			return c.Redirect(FRONTEND_URL, fiber.StatusMovedPermanently)
+		}
+		return c.Status(200).JSON(fiber.Map{"name": "Sankofa API", "status": "running"})
+	})
+
 	// Health check endpoint
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.Status(200).JSON(fiber.Map{
@@ -246,7 +261,7 @@ func main() {
 	emailManager := email.NewManager()
 	authHandler := api.NewAuthHandler(db, emailManager)
 	projectHandler := api.NewProjectHandler(db, chConn)
-	orgHandler := api.NewOrganizationHandler(db, chConn, emailManager) // New
+	orgHandler := api.NewOrganizationHandler(db, chConn, emailManager)       // New
 	eventsHandler := api.NewEventsHandler(db, chConn)                        // Events
 	peopleHandler := api.NewPeopleHandler(db, chConn)                        // People
 	lexiconHandler := api.NewLexiconHandler(db, chConn)                      // Lexicon
@@ -269,16 +284,16 @@ func main() {
 	projectHandler.RegisterRoutes(apiRouter, middleware.RequireAuth, requireEditor, requireAdmin)
 
 	// Data read routes: Viewer+
-	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)        // Events under /api/v1/events
-	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth)       // Lexicon under /api/v1/lexicon
+	eventsHandler.RegisterRoutes(v1, middleware.RequireAuth)  // Events under /api/v1/events
+	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth) // Lexicon under /api/v1/lexicon
 
 	// Analysis routes: Read= Viewer+, Write=Editor+
-	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)        // Funnels under /api/v1/funnels
-	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)          // Flows under /api/v1/flows
-	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)       // Insights under /api/v1/insights
-	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Retentions under /api/v1/retentions
-	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)         // Boards under /api/v1/boards
-	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth)        // Widgets under /api/v1/widgets
+	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Funnels under /api/v1/funnels
+	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)      // Flows under /api/v1/flows
+	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Insights under /api/v1/insights
+	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Retentions under /api/v1/retentions
+	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Boards under /api/v1/boards
+	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Widgets under /api/v1/widgets
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)
@@ -879,5 +894,3 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 
 	fmt.Printf("✅ Seed Complete. Login: %s / <your-password>\n", ADMIN_EMAIL)
 }
-
-
