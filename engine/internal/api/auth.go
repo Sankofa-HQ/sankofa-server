@@ -213,7 +213,6 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		org := database.Organization{
 			Name:      req.OrganizationName,
 			Slug:      generateSlug(req.OrganizationName),
-			Plan:      "Free",
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}

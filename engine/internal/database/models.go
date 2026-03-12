@@ -42,7 +42,6 @@ type Organization struct {
 	Name         string    `gorm:"not null" json:"name"`
 	Slug         string    `gorm:"uniqueIndex;not null" json:"slug"`
 	BillingEmail string    `json:"billing_email"`
-	Plan         string    `gorm:"default:Free" json:"plan"` // Free, Pro, Enterprise
 	CompanySize  string    `json:"company_size"`
 	Industry     string    `json:"industry"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -178,15 +177,7 @@ type TeamProject struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Plan defines the limits for an organization.
-type Plan struct {
-	Name         string    `gorm:"primaryKey" json:"name"` // Free, Pro, Enterprise
-	EventLimit   int64     `json:"event_limit"`
-	ProfileLimit int64     `json:"profile_limit"`
-	ReplayLimit  int64     `json:"replay_limit"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
+
 
 // Cohort represents a user group (Dynamic or Static)
 type Cohort struct {

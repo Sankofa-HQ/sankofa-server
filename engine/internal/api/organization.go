@@ -111,7 +111,6 @@ func (h *OrganizationHandler) CreateOrganization(c *fiber.Ctx) error {
 	org := database.Organization{
 		Name:        req.Name,
 		Slug:        generateSlug(req.Name),
-		Plan:        "Free",
 		CompanySize: req.CompanySize,
 		Industry:    req.Industry,
 		CreatedAt:   time.Now(),
@@ -1125,29 +1124,13 @@ func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
 	orgID, _ := c.Locals("org_id").(string)
 	log.Printf("🔹 GetUsage called for OrgID: %s", orgID)
 
-	// 1. Get Org Plan
+	// 1. Get Org
 	var org database.Organization
 	if err := h.DB.First(&org, "id = ?", orgID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Organization not found"})
 	}
 
-	// 2. Fetch Plan Limits from DB
-	var plan database.Plan
-	if err := h.DB.First(&plan, "name = ?", org.Plan).Error; err != nil {
-		log.Printf("⚠️ Plan '%s' not found, falling back to Free", org.Plan)
-		// Fallback if plan not found - or maybe error?
-		// Let's fallback to Free just in case
-		h.DB.First(&plan, "name = 'Free'")
-	}
-	log.Printf("🔹 Plan Limits: %+v", plan)
-
-	limits := map[string]int64{
-		"events":   plan.EventLimit,
-		"profiles": plan.ProfileLimit,
-		"replays":  plan.ReplayLimit,
-	}
-
-	// 3. Get Usage from ClickHouse
+	// 2. Get Usage from ClickHouse
 	var liveEvents, testEvents uint64
 	var liveProfiles, testProfiles uint64
 
@@ -1173,12 +1156,8 @@ func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
 		}
 	}
 
-	// Response
+	// Response (Basic generic usage, limits managed by billing plugin)
 	return c.JSON(fiber.Map{
-		"plan": fiber.Map{
-			"name":   org.Plan,
-			"limits": limits,
-		},
 		"usage": fiber.Map{
 			"events_live":    liveEvents,
 			"events_test":    testEvents,
@@ -1186,7 +1165,7 @@ func (h *OrganizationHandler) GetUsage(c *fiber.Ctx) error {
 			"profiles_live":  liveProfiles,
 			"profiles_test":  testProfiles,
 			"profiles_total": liveProfiles + testProfiles,
-			"replays":        0, // Mock for now
+			"replays":        0, // Handled separately by EE
 		},
 		"period": fiber.Map{
 			"start": time.Now().AddDate(0, 0, -15), // Mock cycle

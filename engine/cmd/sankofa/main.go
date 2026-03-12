@@ -165,7 +165,6 @@ func main() {
 		&database.Team{},
 		&database.TeamMember{},
 		&database.TeamProject{},
-		&database.Plan{}, // Added Plan
 		&database.OrganizationInvite{},
 		&database.LexiconEvent{},
 		&database.LexiconEventProperty{},
@@ -185,7 +184,7 @@ func main() {
 	// INIT LEXICON GATEKEEPER (Cache + Async Queue)
 	database.InitLexiconStore(db)
 
-	seedDefaultPlans(db) // Seed Plans before Admin
+	// Seed Plans before Admin
 	seedDefaultSuperAdmin(db)
 
 	// 3. INIT CLICKHOUSE (The Muscle)
@@ -839,7 +838,6 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	org := database.Organization{
 		Name:      ADMIN_ORG_NAME,
 		Slug:      "sankofa-admin",
-		Plan:      "Enterprise",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -882,44 +880,4 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	fmt.Printf("✅ Seed Complete. Login: %s / <your-password>\n", ADMIN_EMAIL)
 }
 
-func seedDefaultPlans(db *gorm.DB) {
-	plans := []database.Plan{
-		{
-			Name:         "Free",
-			EventLimit:   1000000,
-			ProfileLimit: 1000,
-			ReplayLimit:  1000,
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		},
-		{
-			Name:         "Pro",
-			EventLimit:   10000000,
-			ProfileLimit: 100000,
-			ReplayLimit:  10000,
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		},
-		{
-			Name:         "Enterprise",
-			EventLimit:   100000000,
-			ProfileLimit: 1000000,
-			ReplayLimit:  100000,
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		},
-	}
 
-	for _, p := range plans {
-		// Upsert
-		var px database.Plan
-		if err := db.Where("name = ?", p.Name).First(&px).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				db.Create(&p)
-			}
-		} else {
-			db.Model(&px).Updates(p)
-		}
-	}
-	fmt.Println("✅ Plans Seeded")
-}
