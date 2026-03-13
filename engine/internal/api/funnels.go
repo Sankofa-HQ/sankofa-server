@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/models"
 
@@ -27,6 +28,7 @@ func (h *FunnelsHandler) RegisterRoutes(router fiber.Router, authMiddleware fibe
 	funnels := router.Group("/projects/:project_id/funnels")
 	funnels.Use(authMiddleware)
 	funnels.Post("/", h.CalculateFunnel)
+	funnels.Post("/users", h.FunnelUsers)
 	funnels.Post("/saved", h.CreateSavedFunnel)
 	funnels.Get("/saved", h.ListSavedFunnels)
 	funnels.Get("/saved/:id", h.GetSavedFunnel)
@@ -170,6 +172,171 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(results)
+}
+
+type FunnelUsersRequest struct {
+	models.FunnelRequest
+	TargetStep int    `json:"target_step"`
+	Action     string `json:"action"`  // "converted" or "dropoff"
+	Segment    string `json:"segment"` // e.g. "MacOS · 10.15" or ""
+	Limit      int    `json:"limit"`
+	Offset     int    `json:"offset"`
+}
+
+func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
+	projectID := c.Params("project_id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Project ID is required"})
+	}
+
+	var req FunnelUsersRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	req.ProjectID = projectID
+	if req.Limit <= 0 || req.Limit > 1000 {
+		req.Limit = 100
+	}
+
+	// Expand merged events
+	for i, step := range req.Steps {
+		if step.EventName != "" {
+			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, []string{step.EventName})
+			if len(expanded) > 0 {
+				req.Steps[i].ExpandedEvents = expanded
+			} else {
+				req.Steps[i].ExpandedEvents = []string{step.EventName}
+			}
+		}
+	}
+
+	// Expand virtual/merged property names in global filters
+	for i, f := range req.GlobalFilters {
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+			req.GlobalFilters[i].ExpandedProperties = expanded
+		}
+	}
+
+	// Expand virtual/merged property names in per-step filters
+	for si, step := range req.Steps {
+		for fi, f := range step.Filters {
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+				req.Steps[si].Filters[fi].ExpandedProperties = expanded
+			}
+		}
+	}
+
+	// Expand virtual/merged property names in breakdowns
+	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
+	for i, bd := range req.Breakdowns {
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, bd)
+		if len(expanded) == 0 {
+			expanded = []string{bd}
+		}
+		req.ExpandedBreakdowns[i] = expanded
+	}
+
+	var windowSeconds int
+	if req.WindowValue > 0 && req.WindowUnit != "" {
+		switch req.WindowUnit {
+		case "seconds":
+			windowSeconds = req.WindowValue
+		case "minutes":
+			windowSeconds = req.WindowValue * 60
+		case "hours":
+			windowSeconds = req.WindowValue * 3600
+		case "days":
+			windowSeconds = req.WindowValue * 86400
+		case "weeks":
+			windowSeconds = req.WindowValue * 604800
+		case "months":
+			windowSeconds = req.WindowValue * 2592000
+		case "sessions":
+			windowSeconds = req.WindowValue * 1800
+		default:
+			windowSeconds = req.WindowValue * 86400
+		}
+	} else {
+		windowSeconds = 604800 // Default to 7 days if unset
+	}
+
+	funnelQuery, args := database.BuildFunnelUsersQuery(req.FunnelRequest, windowSeconds, req.TargetStep, req.Action, req.Segment)
+
+	// Wrap in a query against persons table
+	// We want to fetch user details (properties)
+	usersQuery := fmt.Sprintf(`
+		SELECT 
+			distinct_id,
+			argMax(properties, last_seen) AS properties,
+			max(last_seen) AS created_at
+		FROM persons
+		WHERE project_id = ? AND distinct_id IN (
+			%s
+		)
+		GROUP BY distinct_id
+		LIMIT %d OFFSET %d
+	`, funnelQuery, req.Limit, req.Offset)
+
+	// Combine args
+	// We need to inject projectID as the first argument, and then the funnelQuery args
+	finalArgs := append([]any{req.ProjectID}, args...)
+
+	fmt.Println("=== Funnel Users Query ===")
+	fmt.Println(usersQuery)
+	fmt.Println("=== Funnel Users Args ===", finalArgs)
+
+	ctx := c.Context()
+	rows, err := h.chConn.Query(ctx, usersQuery, finalArgs...)
+	if err != nil {
+		fmt.Println("Funnel Users Query Error:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch funnel users"})
+	}
+	defer rows.Close()
+
+	type UserRes struct {
+		DistinctID string `json:"distinct_id"`
+		Email      string `json:"email"`
+		Name       string `json:"name"`
+		Properties any    `json:"properties"`
+		CreatedAt  string `json:"created_at"`
+	}
+
+	var users []UserRes
+	for rows.Next() {
+		var u UserRes
+		var props map[string]string
+		var createdAt time.Time
+		if err := rows.Scan(&u.DistinctID, &props, &createdAt); err != nil {
+			fmt.Println("Funnel Users Scan Error:", err)
+			continue
+		}
+		
+		u.Properties = props
+		u.CreatedAt = createdAt.Format(time.RFC3339)
+		
+		// Attempt to extract email/name from common properties
+		if email, ok := props["$email"]; ok {
+			u.Email = email
+		} else if email, ok := props["email"]; ok {
+			u.Email = email
+		}
+
+		if name, ok := props["$name"]; ok {
+			u.Name = name
+		} else if name, ok := props["name"]; ok {
+			u.Name = name
+		}
+		
+		users = append(users, u)
+	}
+
+	if users == nil {
+		users = []UserRes{}
+	}
+
+	return c.JSON(fiber.Map{"users": users})
 }
 
 type SaveFunnelRequest struct {
