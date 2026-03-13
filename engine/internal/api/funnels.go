@@ -264,76 +264,114 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 
 	funnelQuery, args := database.BuildFunnelUsersQuery(req.FunnelRequest, windowSeconds, req.TargetStep, req.Action, req.Segment)
 
-	// Wrap in a query against persons table
-	// We want to fetch user details (properties)
-	usersQuery := fmt.Sprintf(`
-		SELECT 
-			distinct_id,
-			argMax(properties, last_seen) AS properties,
-			max(last_seen) AS created_at
-		FROM persons
-		WHERE project_id = ? AND distinct_id IN (
-			%s
-		)
-		GROUP BY distinct_id
-		LIMIT %d OFFSET %d
-	`, funnelQuery, req.Limit, req.Offset)
-
-	// Combine args
-	// We need to inject projectID as the first argument, and then the funnelQuery args
-	finalArgs := append([]any{req.ProjectID}, args...)
-
 	fmt.Println("=== Funnel Users Query ===")
-	fmt.Println(usersQuery)
-	fmt.Println("=== Funnel Users Args ===", finalArgs)
+	fmt.Println(funnelQuery)
+	fmt.Println("=== Funnel Users Args ===", args)
 
+	// Step 1: Get distinct_ids from the funnel sub-query
 	ctx := c.Context()
-	rows, err := h.chConn.Query(ctx, usersQuery, finalArgs...)
+	rows, err := h.chConn.Query(ctx, funnelQuery, args...)
 	if err != nil {
 		fmt.Println("Funnel Users Query Error:", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch funnel users"})
 	}
-	defer rows.Close()
 
-	type UserRes struct {
-		DistinctID string `json:"distinct_id"`
-		Email      string `json:"email"`
-		Name       string `json:"name"`
-		Properties any    `json:"properties"`
-		CreatedAt  string `json:"created_at"`
-	}
-
-	var users []UserRes
+	var distinctIDs []string
 	for rows.Next() {
-		var u UserRes
-		var props map[string]string
-		var createdAt time.Time
-		if err := rows.Scan(&u.DistinctID, &props, &createdAt); err != nil {
+		var did string
+		if err := rows.Scan(&did); err != nil {
 			fmt.Println("Funnel Users Scan Error:", err)
 			continue
 		}
-		
-		u.Properties = props
-		u.CreatedAt = createdAt.Format(time.RFC3339)
-		
-		// Attempt to extract email/name from common properties
-		if email, ok := props["$email"]; ok {
-			u.Email = email
-		} else if email, ok := props["email"]; ok {
-			u.Email = email
-		}
+		distinctIDs = append(distinctIDs, did)
+	}
+	rows.Close()
 
-		if name, ok := props["$name"]; ok {
-			u.Name = name
-		} else if name, ok := props["name"]; ok {
-			u.Name = name
-		}
-		
-		users = append(users, u)
+	fmt.Println("=== Funnel Users Found ===", len(distinctIDs))
+
+	type UserRes struct {
+		DistinctID string            `json:"distinct_id"`
+		Email      string            `json:"email"`
+		Name       string            `json:"name"`
+		Properties map[string]string `json:"properties"`
+		CreatedAt  string            `json:"created_at"`
 	}
 
-	if users == nil {
-		users = []UserRes{}
+	if len(distinctIDs) == 0 {
+		return c.JSON(fiber.Map{"users": []UserRes{}})
+	}
+
+	// Apply limit/offset to the distinct_ids list
+	start := req.Offset
+	if start > len(distinctIDs) {
+		start = len(distinctIDs)
+	}
+	end := start + req.Limit
+	if end > len(distinctIDs) {
+		end = len(distinctIDs)
+	}
+	pagedIDs := distinctIDs[start:end]
+
+	// Step 2: Enrich with person data from persons table (optional — some users may not have profiles)
+	personProps := make(map[string]UserRes)
+	if len(pagedIDs) > 0 {
+		enrichQuery := `
+			SELECT 
+				distinct_id,
+				argMax(properties, last_seen) AS props,
+				max(last_seen) AS latest_seen
+			FROM persons
+			WHERE project_id = ? AND distinct_id IN (?)
+			GROUP BY distinct_id
+		`
+		enrichRows, enrichErr := h.chConn.Query(ctx, enrichQuery, req.ProjectID, pagedIDs)
+		if enrichErr == nil {
+			for enrichRows.Next() {
+				var did string
+				var props map[string]string
+				var lastSeen time.Time
+				if err := enrichRows.Scan(&did, &props, &lastSeen); err != nil {
+					continue
+				}
+
+				email := ""
+				name := ""
+				if v, ok := props["$email"]; ok {
+					email = v
+				} else if v, ok := props["email"]; ok {
+					email = v
+				}
+				if v, ok := props["$name"]; ok {
+					name = v
+				} else if v, ok := props["name"]; ok {
+					name = v
+				}
+
+				personProps[did] = UserRes{
+					DistinctID: did,
+					Email:      email,
+					Name:       name,
+					Properties: props,
+					CreatedAt:  lastSeen.Format(time.RFC3339),
+				}
+			}
+			enrichRows.Close()
+		} else {
+			fmt.Println("Persons enrich query error (non-fatal):", enrichErr)
+		}
+	}
+
+	// Step 3: Build final result — every distinct_id from the funnel, enriched with person data if available
+	var users []UserRes
+	for _, did := range pagedIDs {
+		if enriched, ok := personProps[did]; ok {
+			users = append(users, enriched)
+		} else {
+			users = append(users, UserRes{
+				DistinctID: did,
+				Properties: map[string]string{},
+			})
+		}
 	}
 
 	return c.JSON(fiber.Map{"users": users})
