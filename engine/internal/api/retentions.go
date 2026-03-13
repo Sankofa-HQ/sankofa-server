@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/models"
 
@@ -26,6 +27,7 @@ func (h *RetentionsHandler) RegisterRoutes(router fiber.Router, authMiddleware f
 	retentions := router.Group("/projects/:project_id/retentions")
 	retentions.Use(authMiddleware)
 	retentions.Post("/", h.CalculateRetention)
+	retentions.Post("/users", h.RetentionUsers)
 	retentions.Post("/saved", h.CreateSavedRetention)
 	retentions.Get("/saved", h.ListSavedRetentions)
 	retentions.Get("/saved/:id", h.GetSavedRetention)
@@ -175,6 +177,157 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(results)
+}
+
+// RetentionUsers returns enriched user profiles for users in a specific retention cohort bucket.
+type RetentionUsersRequest struct {
+	models.RetentionRequest
+	CohortDate string `json:"cohort_date"` // e.g. "2025-01-01"
+	PeriodIdx  int    `json:"period_idx"`  // 0 = cohort start, N = Nth period
+	Action     string `json:"action"`      // "retained" or "dropped"
+	Limit      int    `json:"limit"`
+	Offset     int    `json:"offset"`
+}
+
+func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
+	projectID := c.Params("project_id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Project ID is required"})
+	}
+
+	var req RetentionUsersRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	req.ProjectID = projectID
+	if req.Limit <= 0 || req.Limit > 1000 {
+		req.Limit = 100
+	}
+	if req.Action == "" {
+		req.Action = "retained"
+	}
+
+	// Expand events
+	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+	if len(expandedStart) > 0 {
+		req.ExpandedStartEvent = expandedStart
+	} else {
+		req.ExpandedStartEvent = []string{req.StartEvent}
+	}
+
+	expandedReturn := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.ReturnEvent})
+	if len(expandedReturn) > 0 {
+		req.ExpandedReturnEvent = expandedReturn
+	} else {
+		req.ExpandedReturnEvent = []string{req.ReturnEvent}
+	}
+
+	// Expand global filters
+	for i, f := range req.GlobalFilters {
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+			req.GlobalFilters[i].ExpandedProperties = expanded
+		}
+	}
+
+	usersQuery, args := database.BuildRetentionUsersQuery(req.RetentionRequest, req.CohortDate, req.PeriodIdx, req.Action)
+
+	fmt.Println("=== Retention Users Query ===")
+	fmt.Println(usersQuery)
+
+	ctx := c.Context()
+	rows, err := h.chConn.Query(ctx, usersQuery, args...)
+	if err != nil {
+		fmt.Println("Retention Users Query Error:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch retention users"})
+	}
+
+	var distinctIDs []string
+	for rows.Next() {
+		var did string
+		if err := rows.Scan(&did); err != nil {
+			continue
+		}
+		distinctIDs = append(distinctIDs, did)
+	}
+	rows.Close()
+
+	fmt.Println("=== Retention Users Found ===", len(distinctIDs))
+
+	type UserRes struct {
+		DistinctID string            `json:"distinct_id"`
+		Email      string            `json:"email"`
+		Name       string            `json:"name"`
+		Properties map[string]string `json:"properties"`
+		CreatedAt  string            `json:"created_at"`
+	}
+
+	if len(distinctIDs) == 0 {
+		return c.JSON(fiber.Map{"users": []UserRes{}})
+	}
+
+	start := req.Offset
+	if start > len(distinctIDs) {
+		start = len(distinctIDs)
+	}
+	end := start + req.Limit
+	if end > len(distinctIDs) {
+		end = len(distinctIDs)
+	}
+	pagedIDs := distinctIDs[start:end]
+
+	// Enrich from persons table
+	personProps := make(map[string]UserRes)
+	if len(pagedIDs) > 0 {
+		enrichQuery := `
+			SELECT
+				distinct_id,
+				argMax(properties, last_seen) AS props,
+				max(last_seen) AS latest_seen
+			FROM persons
+			WHERE project_id = ? AND distinct_id IN (?)
+			GROUP BY distinct_id
+		`
+		enrichRows, enrichErr := h.chConn.Query(ctx, enrichQuery, req.ProjectID, pagedIDs)
+		if enrichErr == nil {
+			for enrichRows.Next() {
+				var did string
+				var props map[string]string
+				var lastSeen time.Time
+				if err := enrichRows.Scan(&did, &props, &lastSeen); err != nil {
+					continue
+				}
+				email, name := "", ""
+				if v, ok := props["$email"]; ok {
+					email = v
+				} else if v, ok := props["email"]; ok {
+					email = v
+				}
+				if v, ok := props["$name"]; ok {
+					name = v
+				} else if v, ok := props["name"]; ok {
+					name = v
+				}
+				personProps[did] = UserRes{
+					DistinctID: did, Email: email, Name: name,
+					Properties: props, CreatedAt: lastSeen.Format(time.RFC3339),
+				}
+			}
+			enrichRows.Close()
+		} else {
+			fmt.Println("Persons enrich error (non-fatal):", enrichErr)
+		}
+	}
+
+	var users []UserRes
+	for _, did := range pagedIDs {
+		if enriched, ok := personProps[did]; ok {
+			users = append(users, enriched)
+		} else {
+			users = append(users, UserRes{DistinctID: did, Properties: map[string]string{}})
+		}
+	}
+	return c.JSON(fiber.Map{"users": users})
 }
 
 // ... CRUD Handlers ...
