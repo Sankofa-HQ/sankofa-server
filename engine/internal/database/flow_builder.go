@@ -167,8 +167,6 @@ func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 		whereFilter += " AND " + strings.Join(stepFilterWhereExtra, " AND ")
 	}
 
-	finalArgs = append(finalArgs, pathsArgs...)
-
 	// ── Detect conversion breakdown ──
 	var hasSysConversion bool
 	for _, bd := range req.Breakdowns {

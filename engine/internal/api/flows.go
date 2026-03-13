@@ -30,6 +30,7 @@ func (h *FlowsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.
 	flows.Use(authMiddleware)
 
 	flows.Post("/calculate", h.CalculateFlow)
+	flows.Post("/users", h.FlowUsers)
 	flows.Post("/", h.CreateSavedFlow)
 	flows.Get("/", h.ListSavedFlows)
 	flows.Get("/:id", h.GetSavedFlow)
@@ -117,6 +118,165 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		Links: links,
 	})
 }
+
+// FlowUsersRequest handles requests to fetch distinct persons for a specific flow node/step
+type FlowUsersRequest struct {
+	models.FlowRequest
+	NodeID string `json:"node_id"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
+}
+
+func (h *FlowsHandler) FlowUsers(c *fiber.Ctx) error {
+	projectID := c.Params("project_id")
+	if projectID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Project ID is required"})
+	}
+
+	var req FlowUsersRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	req.ProjectID = projectID
+
+	if req.Limit <= 0 || req.Limit > 1000 {
+		req.Limit = 100
+	}
+	if req.Offset < 0 {
+		req.Offset = 0
+	}
+
+	// Expand virtual/merged events for the primary anchor
+	if len(req.Steps) > 0 && req.Steps[0].EventName != "" {
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.Steps[0].EventName})
+		if len(expandedStart) > 0 {
+			req.StartEventExpanded = expandedStart
+		} else {
+			req.StartEventExpanded = []string{req.Steps[0].EventName}
+		}
+	} else if req.StartEvent != "" {
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+		if len(expandedStart) > 0 {
+			req.StartEventExpanded = expandedStart
+		} else {
+			req.StartEventExpanded = []string{req.StartEvent}
+		}
+	}
+
+	ctx := c.Context()
+	query, args := database.BuildFlowUsersQuery(req.FlowRequest, req.NodeID)
+
+	// We only need distinct_ids to join with 'persons' table
+	rows, err := h.chConn.Query(ctx, query, args...)
+	if err != nil {
+		log.Printf("Flow users query error: %v\nQuery: %s\nArgs: %v", err, query, args)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to calculate flow users"})
+	}
+	defer rows.Close()
+
+	var distinctIDs []string
+	for rows.Next() {
+		var distinctID string
+		if err := rows.Scan(&distinctID); err != nil {
+			log.Printf("Flow users scan error: %v", err)
+			continue
+		}
+		distinctIDs = append(distinctIDs, distinctID)
+	}
+
+	// Apply basic limit/offset
+	start := req.Offset
+	if start > len(distinctIDs) {
+		start = len(distinctIDs)
+	}
+	end := start + req.Limit
+	if end > len(distinctIDs) {
+		end = len(distinctIDs)
+	}
+	pagedIDs := distinctIDs[start:end]
+
+	if len(pagedIDs) == 0 {
+		return c.JSON(fiber.Map{"users": []any{}, "total": len(distinctIDs)})
+	}
+
+	personsQuery := `
+		SELECT 
+			p.distinct_id,
+			p.props AS properties,
+			p.latest_seen AS last_seen,
+			groupArray(pa.alias_id) as aliases
+		FROM (
+			SELECT 
+				distinct_id,
+				argMax(properties, last_seen) AS props,
+				max(last_seen) AS latest_seen
+			FROM persons
+			WHERE project_id = ? AND distinct_id IN (?)
+			GROUP BY distinct_id
+		) p
+		LEFT JOIN person_aliases pa 
+			ON p.distinct_id = pa.distinct_id
+		GROUP BY p.distinct_id, p.props, p.latest_seen
+	`
+
+	personsArgs := []any{projectID, pagedIDs}
+
+	personsMap := make(map[string]map[string]any)
+	personsRows, err := h.chConn.Query(ctx, personsQuery, personsArgs...)
+	if err == nil {
+		for personsRows.Next() {
+			var distinctID, propsStr string
+			var lastSeen uint64
+			var aliases []string
+			
+			if err := personsRows.Scan(&distinctID, &propsStr, &lastSeen, &aliases); err == nil {
+				user := map[string]any{
+					"distinct_id": distinctID,
+					"aliases":     aliases,
+					"created_at":  lastSeen,
+				}
+				
+				var props map[string]any
+				if propsStr != "" {
+					if err := json.Unmarshal([]byte(propsStr), &props); err == nil {
+						user["properties"] = props
+						if email, ok := props["$email"].(string); ok {
+							user["email"] = email
+						} else if email, ok := props["email"].(string); ok {
+							user["email"] = email
+						}
+						if name, ok := props["$name"].(string); ok {
+							user["name"] = name
+						} else if name, ok := props["name"].(string); ok {
+							user["name"] = name
+						}
+					}
+				}
+				personsMap[distinctID] = user
+			}
+		}
+		personsRows.Close()
+	} else {
+		log.Printf("Flow users person fetch error: %v", err)
+	}
+
+	var users []map[string]any
+	for _, did := range pagedIDs {
+		if p, ok := personsMap[did]; ok {
+			users = append(users, p)
+		} else {
+			users = append(users, map[string]any{
+				"distinct_id": did,
+			})
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"users": users,
+		"total": len(distinctIDs), // Total subset matching this specific flow path
+	})
+}
+
 
 type SaveFlowRequest struct {
 	Name        string      `json:"name"`
