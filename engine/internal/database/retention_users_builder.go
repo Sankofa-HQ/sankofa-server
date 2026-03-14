@@ -76,7 +76,7 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 	if periodIdx == 0 {
 		// Users who did the start event in this cohort bucket
 		q := fmt.Sprintf(
-			`SELECT DISTINCT u.distinct_id
+			`SELECT DISTINCT u.distinct_id AS distinct_id
 			 FROM events e
 			 INNER JOIN (%s) u ON e.distinct_id = u.distinct_id
 			 WHERE %s AND %s`,
@@ -89,7 +89,7 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 
 	// Period N: users retained = did return event exactly N intervals after their start date
 	retainedSubQ := fmt.Sprintf(
-		`SELECT DISTINCT u.distinct_id
+		`SELECT DISTINCT u.distinct_id AS distinct_id
 		 FROM events e
 		 INNER JOIN (%s) u ON e.distinct_id = u.distinct_id
 		 WHERE %s AND %s AND %s AND dateDiff('%s', u.user_start_date, %s(e.timestamp)) = %d`,
@@ -108,7 +108,7 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 
 	// Dropped = in cohort but NOT in retained
 	startedSubQ := fmt.Sprintf(
-		`SELECT DISTINCT u.distinct_id
+		`SELECT DISTINCT u.distinct_id AS distinct_id
 		 FROM events e
 		 INNER JOIN (%s) u ON e.distinct_id = u.distinct_id
 		 WHERE %s AND %s`,
@@ -124,7 +124,8 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 	)
 
 	// args for dropped = joinArgs (started) + joinArgs (retained) 
-	droppedArgs := append(joinArgs, joinArgs...)
+	droppedArgs := append([]any{}, joinArgs...)
+	droppedArgs = append(droppedArgs, joinArgs...)
 	return droppedQ, droppedArgs
 }
 
