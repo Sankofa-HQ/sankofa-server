@@ -159,7 +159,16 @@ func newBatchIngestHandler(
 			}
 		}
 
-		return c.SendStatus(fiber.StatusOK)
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"ok":                  true,
+			"project_id":          project.ID,
+			"project_name":        project.Name,
+			"environment":         environment,
+			"operations_received": len(request.Operations),
+			"events_received":     len(events),
+			"people_received":     len(people),
+			"aliases_received":    len(aliases),
+		})
 	}
 }
 
