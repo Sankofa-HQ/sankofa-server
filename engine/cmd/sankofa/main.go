@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/joho/godotenv"
-	gonanoid "github.com/matoous/go-nanoid/v2"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -392,215 +390,10 @@ func main() {
 	*/
 
 	// INGESTION (v1)
-	v1.Post("/track", func(c *fiber.Ctx) error {
-		apiKey := c.Get("x-api-key")
-		if apiKey == "" {
-			log.Println("⚠️ Missing API Key. Headers:", c.GetReqHeaders())
-			return c.SendStatus(401)
-		}
-		log.Println("📝 Track Request. Key:", apiKey)
-
-		// Calculate Environment & Find Project
-		var project database.Project
-		var environment string
-
-		// Check Live Key
-		if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
-			environment = "live"
-		} else {
-			// Check Test Key
-			if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
-				environment = "test"
-			} else {
-				// Invalid Key
-				return c.SendStatus(403)
-			}
-		}
-
-		var e AnalyticsEvent
-		if err := c.BodyParser(&e); err != nil {
-			return c.SendStatus(400)
-		}
-
-		// Context Resolution
-		nanoID, _ := gonanoid.New(21)
-		e.ID = "evt_" + nanoID
-		e.TenantID = fmt.Sprint(project.ID) // Still used for sharding/partitioning maybe? Or just legacy.
-		e.ProjectID = fmt.Sprint(project.ID)
-		e.OrganizationID = fmt.Sprint(project.OrganizationID)
-		e.Environment = environment
-		e.Timestamp = time.Now()
-
-		// --- GEOIP RESOLUTION ---
-		clientIP := c.IP()
-
-		// Debug local IPs for development testing
-		if clientIP == "127.0.0.1" || clientIP == "::1" || strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") || strings.HasPrefix(clientIP, "172.") {
-			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (Accra).", clientIP)
-			clientIP = "143.105.209.117" // Mock UK Public IP for local testing
-		}
-
-		loc := utils.LookupIP(clientIP)
-		if loc != nil {
-			log.Printf("🌍 GeoIP Success! Resolved IP %s to %s, %s, %s", clientIP, loc.City, loc.Region, loc.Country)
-			if e.DefaultProperties == nil {
-				e.DefaultProperties = make(map[string]string)
-			}
-			if loc.City != "" {
-				e.DefaultProperties["$city"] = loc.City
-			}
-			if loc.Region != "" {
-				e.DefaultProperties["$region"] = loc.Region
-			}
-			if loc.Country != "" {
-				e.DefaultProperties["$country"] = loc.Country
-			}
-			if loc.Timezone != "" {
-				e.DefaultProperties["$timezone"] = loc.Timezone
-			}
-		}
-
-		// --- PROMOTION LOGIC (Plucking high-value fields) ---
-		if sid, ok := e.Properties["$session_id"]; ok {
-			e.SessionID = sid
-		}
-		if dp := e.DefaultProperties; dp != nil {
-			if city, ok := dp["$city"]; ok {
-				e.City = city
-			}
-			if region, ok := dp["$region"]; ok {
-				e.Region = region
-			}
-			if country, ok := dp["$country"]; ok {
-				e.Country = country
-			}
-			if os, ok := dp["$os"]; ok {
-				e.OS = os
-			}
-			if model, ok := dp["$device_model"]; ok {
-				e.DeviceModel = model
-			}
-		}
-
-		// --- LEXICON GATEKEEPER START ---
-		// Async register event name & properties
-		if database.Store != nil {
-			props := make(map[string]interface{})
-			for k, v := range e.Properties {
-				props[k] = v
-			}
-			database.Store.TrackEvent(e.ProjectID, e.EventName, props)
-		}
-		// --- LEXICON GATEKEEPER END ---
-
-		select {
-		case eventStream <- e:
-			return c.SendStatus(200)
-		default:
-			return c.Status(503).JSON(fiber.Map{"error": "Buffer full"})
-		}
-	})
-
-	v1.Post("/people", func(c *fiber.Ctx) error {
-		apiKey := c.Get("x-api-key")
-		if apiKey == "" {
-			return c.SendStatus(401)
-		}
-
-		// Calculate Environment & Find Project
-		var project database.Project
-		var environment string
-
-		if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
-			environment = "live"
-		} else if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
-			environment = "test"
-		} else {
-			return c.SendStatus(403)
-		}
-
-		var p PersonProfile
-		if err := c.BodyParser(&p); err != nil {
-			return c.SendStatus(400)
-		}
-
-		p.TenantID = fmt.Sprint(project.ID)
-		p.ProjectID = fmt.Sprint(project.ID)
-		p.OrganizationID = fmt.Sprint(project.OrganizationID)
-		p.Environment = environment
-		p.Timestamp = time.Now()
-
-		// --- GEOIP RESOLUTION ---
-		clientIP := c.IP()
-		if clientIP == "127.0.0.1" || clientIP == "::1" || strings.HasPrefix(clientIP, "192.168.") || strings.HasPrefix(clientIP, "10.") || strings.HasPrefix(clientIP, "172.") {
-			log.Printf("🔍 Local IP detected (%s). GeoIP cannot resolve local IPs. Using mock IP (London).", clientIP)
-			clientIP = "143.105.209.117" // Mock UK Public IP for local testing
-		}
-
-		loc := utils.LookupIP(clientIP)
-		if loc != nil {
-			log.Printf("🌍 GeoIP Success! Resolved IP %s to %s, %s, %s", clientIP, loc.City, loc.Region, loc.Country)
-			if p.Properties == nil {
-				p.Properties = make(map[string]string)
-			}
-			if loc.City != "" {
-				p.Properties["$city"] = loc.City
-			}
-			if loc.Region != "" {
-				p.Properties["$region"] = loc.Region
-			}
-			if loc.Country != "" {
-				p.Properties["$country"] = loc.Country
-			}
-			if loc.Timezone != "" {
-				p.Properties["$timezone"] = loc.Timezone
-			}
-		}
-
-		select {
-		case personStream <- p:
-			return c.SendStatus(200)
-		default:
-			return c.Status(503).JSON(fiber.Map{"error": "Buffer full"})
-		}
-	})
-
-	v1.Post("/alias", func(c *fiber.Ctx) error {
-		apiKey := c.Get("x-api-key")
-		if apiKey == "" {
-			return c.SendStatus(401)
-		}
-
-		// Calculate Environment & Find Project
-		var project database.Project
-		var environment string
-
-		if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
-			environment = "live"
-		} else if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
-			environment = "test"
-		} else {
-			return c.SendStatus(403)
-		}
-
-		var a PersonAlias
-		if err := c.BodyParser(&a); err != nil {
-			return c.SendStatus(400)
-		}
-
-		a.TenantID = fmt.Sprint(project.ID)
-		a.ProjectID = fmt.Sprint(project.ID)
-		a.OrganizationID = fmt.Sprint(project.OrganizationID)
-		a.Environment = environment
-		a.Timestamp = time.Now()
-
-		select {
-		case aliasStream <- a:
-			return c.SendStatus(200)
-		default:
-			return c.Status(503).JSON(fiber.Map{"error": "Buffer full"})
-		}
-	})
+	v1.Post("/batch", newBatchIngestHandler(db, eventStream, personStream, aliasStream))
+	v1.Post("/track", newTrackIngestHandler(db, eventStream))
+	v1.Post("/people", newPeopleIngestHandler(db, personStream))
+	v1.Post("/alias", newAliasIngestHandler(db, aliasStream))
 
 	// START SERVER
 	go func() {
