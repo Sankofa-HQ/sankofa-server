@@ -179,6 +179,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 	offset := c.QueryInt("offset", 0)
 	distinctID := c.Query("distinct_id", "")
+	sessionID := c.Query("session_id", "")
 	startTime := c.Query("start_time", "")
 	endTime := c.Query("end_time", "")
 	environment := c.Query("environment", "live")
@@ -193,6 +194,11 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 	if hideSystem {
 		whereClause += " AND event_name NOT LIKE '$%'"
+	}
+
+	if sessionID != "" {
+		whereClause += " AND session_id = ?"
+		queryArgs = append(queryArgs, sessionID)
 	}
 
 	if distinctID != "" {
