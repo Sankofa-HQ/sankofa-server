@@ -39,6 +39,7 @@ type Event struct {
 	ProjectID         string            `json:"project_id"`
 	OrganizationID    string            `json:"organization_id"`
 	Environment       string            `json:"environment"`
+	UserAvatar        string            `json:"user_avatar"`
 
 	// Promoted fields for reading from DB
 	SessionID   string `json:"-"`
@@ -653,6 +654,43 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	// Default empty slice if nil
 	if events == nil {
 		events = []Event{}
+	}
+
+	// Fetch Avatars for the result set
+	if len(events) > 0 {
+		distinctIDs := make([]string, 0)
+		idMap := make(map[string]bool)
+		for _, e := range events {
+			if !idMap[e.DistinctID] {
+				distinctIDs = append(distinctIDs, e.DistinctID)
+				idMap[e.DistinctID] = true
+			}
+		}
+
+		avatarQuery := `
+			SELECT distinct_id, argMax(properties['$avatar'], last_seen) as avatar
+			FROM persons
+			WHERE project_id = ? AND environment = ? AND distinct_id IN (?)
+			GROUP BY distinct_id
+		`
+		avatarRows, err := h.CH.Query(context.Background(), avatarQuery, projID, environment, distinctIDs)
+		if err == nil {
+			defer avatarRows.Close()
+			avatarMap := make(map[string]string)
+			for avatarRows.Next() {
+				var dID, avatar string
+				if err := avatarRows.Scan(&dID, &avatar); err == nil {
+					avatarMap[dID] = avatar
+				}
+			}
+			for i := range events {
+				if avatar, ok := avatarMap[events[i].DistinctID]; ok {
+					events[i].UserAvatar = avatar
+				}
+			}
+		} else {
+			log.Printf("Failed to fetch avatars for events: %v", err)
+		}
 	}
 
 	return c.JSON(fiber.Map{
