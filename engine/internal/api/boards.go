@@ -285,9 +285,15 @@ func (h *BoardsHandler) GetBoard(c *fiber.Ctx) error {
 	}
 
 	boardID := c.Params("id")
+	environment := c.Query("environment")
 	var board database.Board
 
-	if err := h.DB.Preload("Widgets").Preload("CreatedBy").Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+	query := h.DB.Preload("Widgets").Preload("CreatedBy").Where("id = ? AND project_id = ?", boardID, project.ID)
+	if environment != "" {
+		query = query.Where("environment = ?", environment)
+	}
+
+	if err := query.First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
@@ -407,7 +413,12 @@ func (h *BoardsHandler) UpdateBoard(c *fiber.Ctx) error {
 
 	boardID := c.Params("id")
 	var board database.Board
-	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+	env := c.Query("environment")
+	query := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID)
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+	if err := query.First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
@@ -509,8 +520,15 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 	}
 
 	boardID := c.Params("id")
+	environment := c.Query("environment")
 	var original database.Board
-	if err := h.DB.Preload("Widgets").Where("id = ? AND project_id = ?", boardID, project.ID).First(&original).Error; err != nil {
+	
+	query := h.DB.Preload("Widgets").Where("id = ? AND project_id = ?", boardID, project.ID)
+	if environment != "" {
+		query = query.Where("environment = ?", environment)
+	}
+	
+	if err := query.First(&original).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
@@ -928,9 +946,14 @@ func (h *BoardsHandler) UpdateBoardLayout(c *fiber.Ctx) error {
 	}
 
 	boardID := c.Params("id")
+	env := c.Query("environment")
 
 	var board database.Board
-	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+	query := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID)
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+	if err := query.First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
@@ -975,8 +998,13 @@ func (h *BoardsHandler) AddBoardWidget(c *fiber.Ctx) error {
 	}
 
 	boardID := c.Params("id")
+	env := c.Query("environment")
 	var board database.Board
-	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+	query := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID)
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+	if err := query.First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
@@ -1026,9 +1054,14 @@ func (h *BoardsHandler) DeleteBoardWidget(c *fiber.Ctx) error {
 
 	boardID := c.Params("id")
 	widgetID := c.Params("widgetId")
+	env := c.Query("environment")
 
 	var board database.Board
-	if err := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID).First(&board).Error; err != nil {
+	query := h.DB.Where("id = ? AND project_id = ?", boardID, project.ID)
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+	if err := query.First(&board).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Board not found"})
 	}
 
