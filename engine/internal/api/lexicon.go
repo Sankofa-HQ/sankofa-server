@@ -257,6 +257,9 @@ func (h *LexiconHandler) UpdateEvent(c *fiber.Ctx) error {
 		log.Println("❌ Update Event Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
 	}
+	if result.RowsAffected == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Event not found or no changes made"})
+	}
 
 	return c.JSON(fiber.Map{"success": true})
 }
@@ -529,6 +532,9 @@ func (h *LexiconHandler) UpdateEventProperty(c *fiber.Ctx) error {
 		log.Println("❌ Update Event Property Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
 	}
+	if result.RowsAffected == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Property not found or no changes made"})
+	}
 	return c.JSON(fiber.Map{"success": true})
 }
 
@@ -765,6 +771,9 @@ func (h *LexiconHandler) UpdateProfileProperty(c *fiber.Ctx) error {
 	if result.Error != nil {
 		log.Println("❌ Update Profile Property Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
+	}
+	if result.RowsAffected == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Profile property not found or no changes made"})
 	}
 	return c.JSON(fiber.Map{"success": true})
 }

@@ -197,6 +197,17 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		whereClause += " AND event_name NOT LIKE '$%'"
 	}
 
+	// Filter out hidden events based on Lexicon
+	var hiddenEventNames []string
+	h.DB.Model(&database.LexiconEvent{}).
+		Where("project_id = ? AND environment = ? AND (status IN ? OR hidden = ?)", project.ID, environment, []string{"rejected", "hidden"}, true).
+		Pluck("name", &hiddenEventNames)
+
+	if len(hiddenEventNames) > 0 {
+		whereClause += " AND event_name NOT IN ?"
+		queryArgs = append(queryArgs, hiddenEventNames)
+	}
+
 	if sessionID != "" {
 		whereClause += " AND session_id = ?"
 		queryArgs = append(queryArgs, sessionID)
@@ -772,9 +783,22 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 		if hideSystem {
 			query += " AND event_name NOT LIKE '$%'"
 		}
+
+		// Filter out hidden events based on Lexicon even in fallback
+		var hiddenEventNames []string
+		h.DB.Model(&database.LexiconEvent{}).
+			Where("project_id = ? AND environment = ? AND (status IN ? OR hidden = ?)", project.ID, environment, []string{"rejected", "hidden"}, true).
+			Pluck("name", &hiddenEventNames)
+
+		args := []interface{}{projID, environment}
+		if len(hiddenEventNames) > 0 {
+			query += " AND event_name NOT IN ?"
+			args = append(args, hiddenEventNames)
+		}
+
 		query += " ORDER BY event_name"
 
-		rows, err := h.CH.Query(context.Background(), query, projID, environment)
+		rows, err := h.CH.Query(context.Background(), query, args...)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
