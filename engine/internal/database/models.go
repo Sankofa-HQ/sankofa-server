@@ -316,6 +316,7 @@ type Board struct {
 	ProjectID   string          `gorm:"not null;index;type:varchar(32)" json:"project_id"`
 	Name        string          `gorm:"not null" json:"name"`
 	Description string          `json:"description"`
+	Environment string          `gorm:"type:varchar(20);default:'live';index" json:"environment"`
 	IsSystem    bool            `gorm:"default:false" json:"is_system"` // If true, cannot be deleted or modified
 	IsPinned    bool            `gorm:"default:false" json:"is_pinned"`
 	Layout      json.RawMessage `gorm:"type:text" json:"layout"` // React Grid Layout JSON mapping

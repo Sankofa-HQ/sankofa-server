@@ -151,14 +151,17 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 		return err
 	}
 
+	environment := c.Query("environment", "live")
+
 	// ── 1. System board (auto-create if missing) ──────────────────────────
 	var defaultBoard database.Board
-	if err := h.DB.Where("project_id = ? AND is_system = ?", project.ID, true).First(&defaultBoard).Error; err != nil {
+	if err := h.DB.Where("project_id = ? AND environment = ? AND is_system = ?", project.ID, environment, true).First(&defaultBoard).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			defaultBoard = database.Board{
 				ProjectID:   project.ID,
 				Name:        "Analytics Overview",
 				Description: "Real-time performance across all channels.",
+				Environment: environment,
 				IsSystem:    true,
 				IsPinned:    true,
 				CreatedByID: userID,
@@ -172,7 +175,7 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 	// ── 2. Own boards ─────────────────────────────────────────────────────
 	var ownBoards []database.Board
 	if err := h.DB.Preload("Widgets").Preload("CreatedBy").
-		Where("project_id = ? AND created_by_id = ?", project.ID, userID).
+		Where("project_id = ? AND environment = ? AND created_by_id = ?", project.ID, environment, userID).
 		Order("is_system DESC, created_at ASC").
 		Find(&ownBoards).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch boards"})
@@ -181,7 +184,7 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 	// Include system boards created by others (e.g. first user created the system board)
 	var systemBoards []database.Board
 	if err := h.DB.Preload("Widgets").Preload("CreatedBy").
-		Where("project_id = ? AND is_system = ? AND created_by_id != ?", project.ID, true, userID).
+		Where("project_id = ? AND environment = ? AND is_system = ? AND created_by_id != ?", project.ID, environment, true, userID).
 		Find(&systemBoards).Error; err == nil {
 		ownBoards = append(systemBoards, ownBoards...)
 	}
@@ -356,6 +359,7 @@ func (h *BoardsHandler) CreateBoard(c *fiber.Ctx) error {
 	type CreateBoardRequest struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Environment string `json:"environment"`
 	}
 
 	var req CreateBoardRequest
@@ -367,10 +371,16 @@ func (h *BoardsHandler) CreateBoard(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Board name is required"})
 	}
 
+	env := req.Environment
+	if env == "" {
+		env = "live"
+	}
+
 	board := database.Board{
 		ProjectID:   project.ID,
 		Name:        req.Name,
 		Description: req.Description,
+		Environment: env,
 		IsSystem:    false,
 		IsPinned:    false,
 		CreatedByID: userID,
@@ -509,6 +519,7 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 		ProjectID:   project.ID,
 		Name:        original.Name + " (Copy)",
 		Description: original.Description,
+		Environment: original.Environment,
 		IsSystem:    false,
 		IsPinned:    false,
 		CreatedByID: userID,
