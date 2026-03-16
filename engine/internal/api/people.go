@@ -289,34 +289,48 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	projID := project.ID
 
 	// 2. Build ClickHouse Query
-	// Use a subquery with argMax to deduplicate ReplacingMergeTree rows
-	// This ensures we get only the latest profile per distinct_id
+	// Use a 3-level subquery structure:
+	// 1. Inner: Deduplicate profiles per distinct_id.
+	// 2. Mid: Map each distinct_id to its canonical identity using unique aliases (mid_props, mid_seen) 
+	//    to avoid "nested aggregate function" errors in ClickHouse.
+	// 3. Outer: Group by canonical_id to merge all aliased identities into a single person record.
 	baseQuery := `
 		SELECT 
-			p.distinct_id,
-			p.props AS properties,
-			p.latest_seen AS last_seen,
-			groupArray(pa.alias_id) as aliases
+			canonical_id as distinct_id,
+			argMax(mid_props, mid_seen) as properties,
+			max(mid_seen) as last_seen,
+			groupUniqArray(alias_id) as aliases
 		FROM (
 			SELECT 
-				distinct_id,
-				argMax(properties, last_seen) AS props,
-				max(last_seen) AS latest_seen
-			FROM persons
-			WHERE project_id = ? AND environment = ?
-			GROUP BY distinct_id
-		) p
-		LEFT JOIN person_aliases pa 
-			ON p.distinct_id = pa.distinct_id
+				p.distinct_id,
+				p.props AS mid_props,
+				p.latest_seen AS mid_seen,
+				if(pa.distinct_id != '', pa.distinct_id, p.distinct_id) as canonical_id,
+				pa.alias_id
+			FROM (
+				SELECT 
+					distinct_id,
+					argMax(properties, last_seen) AS props,
+					max(last_seen) AS latest_seen
+				FROM persons
+				WHERE project_id = ? AND environment = ?
+				GROUP BY distinct_id
+			) p
+			LEFT JOIN (
+				SELECT alias_id, distinct_id 
+				FROM person_aliases 
+				WHERE project_id = ? AND environment = ?
+			) pa ON p.distinct_id = pa.alias_id
+		)
 		WHERE 1=1
 	`
-	args := []interface{}{projID, environment}
+	args := []interface{}{projID, environment, projID, environment}
 
 	if search != "" {
 		// Search both distinct_id and aliases (resolve alias -> distinct_id)
 		baseQuery += ` AND (
-			positionCaseInsensitive(p.distinct_id, ?) > 0 
-			OR p.distinct_id IN (
+			positionCaseInsensitive(distinct_id, ?) > 0 
+			OR distinct_id IN (
 				SELECT alias_id FROM person_aliases 
 				WHERE positionCaseInsensitive(distinct_id, ?) > 0
 			)
@@ -346,38 +360,38 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 
 					switch f.Operator {
 					case "is":
-						baseQuery += fmt.Sprintf(" AND p.props['%s'] = ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND properties['%s'] = ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "is_not":
-						baseQuery += fmt.Sprintf(" AND p.props['%s'] != ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND properties['%s'] != ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "contains":
-						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.props['%s'], ?) > 0", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(properties['%s'], ?) > 0", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "does_not_contain":
-						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(p.props['%s'], ?) = 0", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(properties['%s'], ?) = 0", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "is_set":
-						baseQuery += fmt.Sprintf(" AND mapContains(p.props, '%s')", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND mapContains(properties, '%s')", sanitizeKey(f.Property))
 					case "is_not_set":
-						baseQuery += fmt.Sprintf(" AND NOT mapContains(p.props, '%s')", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND NOT mapContains(properties, '%s')", sanitizeKey(f.Property))
 					case "gt":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "lt":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "gte":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "lte":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(p.props['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "eq":
-						baseQuery += fmt.Sprintf(" AND p.props['%s'] = ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND properties['%s'] = ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "neq":
-						baseQuery += fmt.Sprintf(" AND p.props['%s'] != ?", sanitizeKey(f.Property))
+						baseQuery += fmt.Sprintf(" AND properties['%s'] != ?", sanitizeKey(f.Property))
 						args = append(args, valStr)
 					case "in_last":
 						// Handle Date "in_last" logic: e.g. "7d"
@@ -401,7 +415,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 							} // minutes or months? Assuming minutes for simple parse, but UI usually sends 'd' or 'h'
 						}
 						if seconds > 0 {
-							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(p.props['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
+							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(properties['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
 							args = append(args, seconds)
 						}
 					}
@@ -518,10 +532,10 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 
 					// 4. Apply to Main Query
 					if f.BehaviorType == "did" {
-						baseQuery += fmt.Sprintf(" AND p.distinct_id IN (%s)", subQuery)
+						baseQuery += fmt.Sprintf(" AND distinct_id IN (%s)", subQuery)
 						args = append(args, subArgs...)
 					} else { // did_not
-						baseQuery += fmt.Sprintf(" AND p.distinct_id NOT IN (%s)", subQuery)
+						baseQuery += fmt.Sprintf(" AND distinct_id NOT IN (%s)", subQuery)
 						args = append(args, subArgs...)
 					}
 				} else if f.FilterType == "cohort" {
@@ -555,9 +569,9 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 
 					if cohortSQL != "" {
 						if f.BehaviorType == "did_not" { // exclude cohort (rare but possible)
-							baseQuery += fmt.Sprintf(" AND p.distinct_id NOT IN (%s)", cohortSQL)
+							baseQuery += fmt.Sprintf(" AND distinct_id NOT IN (%s)", cohortSQL)
 						} else {
-							baseQuery += fmt.Sprintf(" AND p.distinct_id IN (%s)", cohortSQL)
+							baseQuery += fmt.Sprintf(" AND distinct_id IN (%s)", cohortSQL)
 						}
 						args = append(args, cohortArgs...)
 					}
@@ -569,8 +583,8 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 	}
 
 	baseQuery += `
-		GROUP BY p.distinct_id, p.props, p.latest_seen
-		ORDER BY p.latest_seen DESC
+		GROUP BY distinct_id
+		ORDER BY last_seen DESC
 		LIMIT ? OFFSET ?
 	`
 	args = append(args, limit, offset)
