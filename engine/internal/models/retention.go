@@ -3,6 +3,7 @@ package models
 // RetentionRequest is the JSON body sent by the frontend Retention query builder.
 type RetentionRequest struct {
 	ProjectID           string            `json:"project_id"`
+	Environment         string            `json:"environment"` // "live" or "test"
 	StartEvent          string            `json:"start_event"`
 	ExpandedStartEvent  []string          `json:"-"`
 	ReturnEvent         string            `json:"return_event"`

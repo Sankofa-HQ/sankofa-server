@@ -12,6 +12,7 @@ type FlowStep struct {
 // FlowRequest specifies the parameters for querying user flows.
 type FlowRequest struct {
 	ProjectID       string    `json:"project_id"`
+	Environment     string    `json:"environment"` // "live" or "test"
 	GlobalDateRange DateRange `json:"global_date_range"`
 
 	// ── Legacy flat fields (backward compat with old frontend) ──

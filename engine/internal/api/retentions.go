@@ -47,6 +47,9 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 	}
 
 	req.ProjectID = projectID
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
 
 	// Expand Events
 	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
@@ -200,6 +203,9 @@ func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	req.ProjectID = projectID
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 100
 	}
@@ -285,10 +291,10 @@ func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
 				argMax(properties, last_seen) AS props,
 				max(last_seen) AS latest_seen
 			FROM persons
-			WHERE project_id = ? AND distinct_id IN (?)
+			WHERE project_id = ? AND environment = ? AND distinct_id IN (?)
 			GROUP BY distinct_id
 		`
-		enrichRows, enrichErr := h.chConn.Query(ctx, enrichQuery, req.ProjectID, pagedIDs)
+		enrichRows, enrichErr := h.chConn.Query(ctx, enrichQuery, req.ProjectID, req.Environment, pagedIDs)
 		if enrichErr == nil {
 			for enrichRows.Next() {
 				var did string
@@ -335,6 +341,7 @@ func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
 type SaveRetentionRequest struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
+	Environment string      `json:"environment"`
 	QueryAST    interface{} `json:"query_ast"`
 	IsPinned    bool        `json:"is_pinned"`
 }
@@ -361,8 +368,13 @@ func (h *RetentionsHandler) CreateSavedRetention(c *fiber.Ctx) error {
 
 	astBytes, _ := json.Marshal(req.QueryAST)
 
+	if req.Environment == "" {
+		req.Environment = "live"
+	}
+
 	retention := database.SavedRetention{
 		ProjectID:   projectID,
+		Environment: req.Environment,
 		Name:        req.Name,
 		Description: req.Description,
 		QueryAST:    astBytes,
@@ -392,7 +404,14 @@ func (h *RetentionsHandler) ListSavedRetentions(c *fiber.Ctx) error {
 	}
 
 	var retentions []database.SavedRetention
-	if err := h.db.Where("project_id = ?", projectID).Preload("CreatedBy").Order("created_at DESC").Find(&retentions).Error; err != nil {
+	query := h.db.Where("project_id = ?", projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Preload("CreatedBy").Order("created_at DESC").Find(&retentions).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch saved retentions"})
 	}
 
@@ -403,7 +422,14 @@ func (h *RetentionsHandler) GetSavedRetention(c *fiber.Ctx) error {
 	projectID := c.Params("project_id")
 	retentionID := c.Params("id")
 	var retention database.SavedRetention
-	if err := h.db.Where("id = ? AND project_id = ?", retentionID, projectID).First(&retention).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", retentionID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.First(&retention).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Saved retention not found"})
 	}
 	return c.JSON(retention)
@@ -414,7 +440,14 @@ func (h *RetentionsHandler) UpdateSavedRetention(c *fiber.Ctx) error {
 	retentionID := c.Params("id")
 
 	var retention database.SavedRetention
-	if err := h.db.Where("id = ? AND project_id = ?", retentionID, projectID).First(&retention).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", retentionID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.First(&retention).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Saved retention not found"})
 	}
 
@@ -451,7 +484,14 @@ func (h *RetentionsHandler) DeleteSavedRetention(c *fiber.Ctx) error {
 	projectID := c.Params("project_id")
 	retentionID := c.Params("id")
 
-	if err := h.db.Where("id = ? AND project_id = ?", retentionID, projectID).Delete(&database.SavedRetention{}).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", retentionID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Delete(&database.SavedRetention{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete saved retention"})
 	}
 	return c.SendStatus(204)

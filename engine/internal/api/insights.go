@@ -48,6 +48,10 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 
 	req.ProjectID = projectID
 
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
+
 	if len(req.Metrics) == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "At least one metric is required"})
 	}
@@ -143,6 +147,7 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 type SaveInsightRequest struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
+	Environment string      `json:"environment"`
 	QueryAST    interface{} `json:"query_ast"`
 	IsPinned    bool        `json:"is_pinned"`
 }
@@ -180,8 +185,13 @@ func (h *InsightsHandler) CreateSavedInsight(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid Query AST"})
 	}
 
+	if req.Environment == "" {
+		req.Environment = "live"
+	}
+
 	insight := database.SavedInsight{
 		ProjectID:   projectID,
+		Environment: req.Environment,
 		Name:        req.Name,
 		Description: req.Description,
 		QueryAST:    astBytes,
@@ -216,7 +226,14 @@ func (h *InsightsHandler) ListSavedInsights(c *fiber.Ctx) error {
 	}
 
 	var insights []database.SavedInsight
-	if err := h.db.Where("project_id = ?", projectID).Preload("CreatedBy").Order("created_at DESC").Find(&insights).Error; err != nil {
+	query := h.db.Where("project_id = ?", projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Preload("CreatedBy").Order("created_at DESC").Find(&insights).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch saved insights"})
 	}
 
@@ -241,7 +258,14 @@ func (h *InsightsHandler) GetSavedInsight(c *fiber.Ctx) error {
 	}
 
 	var insight database.SavedInsight
-	if err := h.db.Where("id = ? AND project_id = ?", insightID, projectID).First(&insight).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", insightID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.First(&insight).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Saved insight not found"})
 	}
 
@@ -266,7 +290,14 @@ func (h *InsightsHandler) UpdateSavedInsight(c *fiber.Ctx) error {
 	}
 
 	var insight database.SavedInsight
-	if err := h.db.Where("id = ? AND project_id = ?", insightID, projectID).First(&insight).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", insightID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.First(&insight).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Saved insight not found"})
 	}
 
@@ -321,7 +352,14 @@ func (h *InsightsHandler) DeleteSavedInsight(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
-	if err := h.db.Where("id = ? AND project_id = ?", insightID, projectID).Delete(&database.SavedInsight{}).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", insightID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Delete(&database.SavedInsight{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete saved insight"})
 	}
 

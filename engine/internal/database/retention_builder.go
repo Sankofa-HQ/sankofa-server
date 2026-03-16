@@ -25,8 +25,8 @@ func BuildRetentionQuery(req models.RetentionRequest) (string, []any) {
 	}
 
 	// ── 2. Build global WHERE clause ──
-	whereStmt := "project_id = ?"
-	args = append(args, req.ProjectID)
+	whereStmt := "project_id = ? AND environment = ?"
+	args = append(args, req.ProjectID, req.Environment)
 
 	if len(req.GlobalFilters) > 0 {
 		globalFilterStmt, globalFilterArgs := buildFilterConds(req.GlobalFilters)

@@ -49,6 +49,9 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	req.ProjectID = projectID
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
 
 	// Expand virtual/merged events for the primary anchor
 	ctx := c.Context()
@@ -138,6 +141,9 @@ func (h *FlowsHandler) FlowUsers(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	req.ProjectID = projectID
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
 
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 100
@@ -219,7 +225,7 @@ func (h *FlowsHandler) FlowUsers(c *fiber.Ctx) error {
 		GROUP BY p.distinct_id, p.props, p.latest_seen
 	`
 
-	personsArgs := []any{projectID, pagedIDs}
+	personsArgs := []any{projectID, req.Environment, pagedIDs}
 
 	personsMap := make(map[string]map[string]any)
 	personsRows, err := h.chConn.Query(ctx, personsQuery, personsArgs...)
@@ -281,6 +287,7 @@ func (h *FlowsHandler) FlowUsers(c *fiber.Ctx) error {
 type SaveFlowRequest struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
+	Environment string      `json:"environment"`
 	QueryAST    interface{} `json:"query_ast"`
 	IsPinned    bool        `json:"is_pinned"`
 }
@@ -299,8 +306,13 @@ func (h *FlowsHandler) CreateSavedFlow(c *fiber.Ctx) error {
 
 	astBytes, _ := json.Marshal(req.QueryAST)
 
+	if req.Environment == "" {
+		req.Environment = "live"
+	}
+
 	flow := database.SavedFlow{
 		ProjectID:   projectID,
+		Environment: req.Environment,
 		Name:        req.Name,
 		Description: req.Description,
 		QueryAST:    astBytes,
@@ -319,7 +331,13 @@ func (h *FlowsHandler) ListSavedFlows(c *fiber.Ctx) error {
 	projectID := c.Params("project_id")
 	var flows []database.SavedFlow
 
-	if err := h.db.Where("project_id = ?", projectID).Order("created_at desc").Find(&flows).Error; err != nil {
+	query := h.db.Where("project_id = ?", projectID)
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Order("created_at desc").Find(&flows).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to list flows"})
 	}
 
@@ -371,7 +389,13 @@ func (h *FlowsHandler) DeleteSavedFlow(c *fiber.Ctx) error {
 	projectID := c.Params("project_id")
 	flowID := c.Params("id")
 
-	if err := h.db.Where("id = ? AND project_id = ?", flowID, projectID).Delete(&database.SavedFlow{}).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", flowID, projectID)
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Delete(&database.SavedFlow{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete flow"})
 	}
 

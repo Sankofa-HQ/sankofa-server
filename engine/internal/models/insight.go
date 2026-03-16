@@ -12,6 +12,7 @@ type InsightMetric struct {
 // InsightRequest is the JSON body sent by the frontend Insights query builder.
 type InsightRequest struct {
 	ProjectID          string            `json:"project_id"`
+	Environment        string            `json:"environment"` // "live" or "test"
 	GlobalDateRange    DateRange         `json:"global_date_range"`
 	Interval           string            `json:"interval"` // "day", "week", "month"
 	Metrics            []InsightMetric   `json:"metrics"`

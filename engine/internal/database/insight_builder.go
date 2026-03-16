@@ -29,8 +29,8 @@ func BuildInsightQuery(req models.InsightRequest) (string, []any) {
 	}
 
 	// ── Build global WHERE clause ──
-	whereStmt := "project_id = ?"
-	args = append(args, req.ProjectID)
+	whereStmt := "project_id = ? AND environment = ?"
+	args = append(args, req.ProjectID, req.Environment)
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
 		whereStmt += " AND timestamp >= ? AND timestamp <= ?"

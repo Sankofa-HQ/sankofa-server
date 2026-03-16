@@ -50,6 +50,11 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	// Ensure projectID is populated from URL path overrides body
 	req.ProjectID = projectID
 
+	// Use environment from context or query params if not in body
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
+
 	// Evaluate merged events
 	for i, step := range req.Steps {
 		if step.EventName != "" {
@@ -194,6 +199,9 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	req.ProjectID = projectID
+	if req.Environment == "" {
+		req.Environment = c.Query("environment", "live")
+	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 100
 	}
@@ -321,10 +329,10 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 				argMax(properties, last_seen) AS props,
 				max(last_seen) AS latest_seen
 			FROM persons
-			WHERE project_id = ? AND distinct_id IN (?)
+			WHERE project_id = ? AND environment = ? AND distinct_id IN (?)
 			GROUP BY distinct_id
 		`
-		enrichRows, enrichErr := h.chConn.Query(ctx, enrichQuery, req.ProjectID, pagedIDs)
+		enrichRows, enrichErr := h.chConn.Query(ctx, enrichQuery, req.ProjectID, req.Environment, pagedIDs)
 		if enrichErr == nil {
 			for enrichRows.Next() {
 				var did string
@@ -380,6 +388,7 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 type SaveFunnelRequest struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
+	Environment string      `json:"environment"`
 	QueryAST    interface{} `json:"query_ast"` // Accepts any JSON object
 	IsPinned    bool        `json:"is_pinned"`
 }
@@ -417,8 +426,13 @@ func (h *FunnelsHandler) CreateSavedFunnel(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid Query AST"})
 	}
 
+	if req.Environment == "" {
+		req.Environment = "live"
+	}
+
 	funnel := database.SavedFunnel{
 		ProjectID:   projectID,
+		Environment: req.Environment,
 		Name:        req.Name,
 		Description: req.Description,
 		QueryAST:    astBytes,
@@ -453,7 +467,14 @@ func (h *FunnelsHandler) ListSavedFunnels(c *fiber.Ctx) error {
 	}
 
 	var funnels []database.SavedFunnel
-	if err := h.db.Where("project_id = ?", projectID).Preload("CreatedBy").Order("created_at DESC").Find(&funnels).Error; err != nil {
+	query := h.db.Where("project_id = ?", projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Preload("CreatedBy").Order("created_at DESC").Find(&funnels).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch saved funnels"})
 	}
 
@@ -478,7 +499,14 @@ func (h *FunnelsHandler) GetSavedFunnel(c *fiber.Ctx) error {
 	}
 
 	var funnel database.SavedFunnel
-	if err := h.db.Where("id = ? AND project_id = ?", funnelID, projectID).First(&funnel).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", funnelID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.First(&funnel).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Saved funnel not found"})
 	}
 
@@ -503,7 +531,14 @@ func (h *FunnelsHandler) UpdateSavedFunnel(c *fiber.Ctx) error {
 	}
 
 	var funnel database.SavedFunnel
-	if err := h.db.Where("id = ? AND project_id = ?", funnelID, projectID).First(&funnel).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", funnelID, projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.First(&funnel).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Saved funnel not found"})
 	}
 
@@ -558,7 +593,13 @@ func (h *FunnelsHandler) DeleteSavedFunnel(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
-	if err := h.db.Where("id = ? AND project_id = ?", funnelID, projectID).Delete(&database.SavedFunnel{}).Error; err != nil {
+	query := h.db.Where("id = ? AND project_id = ?", funnelID, projectID)
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Delete(&database.SavedFunnel{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete saved funnel"})
 	}
 

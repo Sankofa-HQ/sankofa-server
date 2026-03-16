@@ -4,6 +4,7 @@ import "time"
 
 type FunnelRequest struct {
 	ProjectID          string            `json:"project_id"`
+	Environment        string            `json:"environment"` // "live" or "test"
 	GlobalDateRange    DateRange         `json:"global_date_range"`
 	WindowValue        int               `json:"window_value"`
 	WindowUnit         string            `json:"window_unit"` // "seconds", "minutes", "hours", "days", "weeks", "months", "sessions"

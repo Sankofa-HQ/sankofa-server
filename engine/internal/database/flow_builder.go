@@ -30,8 +30,8 @@ func BuildFlowQuery(req models.FlowRequest) (string, []any) {
 func buildMultiStepFlowQuery(req models.FlowRequest) (string, []any) {
 	var whereArgs []any
 
-	whereStmt := "project_id = ?"
-	whereArgs = append(whereArgs, req.ProjectID)
+	whereStmt := "project_id = ? AND environment = ?"
+	whereArgs = append(whereArgs, req.ProjectID, req.Environment)
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
 		whereStmt += " AND timestamp >= ? AND timestamp <= ?"
@@ -385,8 +385,8 @@ LIMIT 1000
 func buildLegacyFlowQuery(req models.FlowRequest) (string, []any) {
 	var whereArgs []any
 
-	whereStmt := "project_id = ?"
-	whereArgs = append(whereArgs, req.ProjectID)
+	whereStmt := "project_id = ? AND environment = ?"
+	whereArgs = append(whereArgs, req.ProjectID, req.Environment)
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
 		whereStmt += " AND timestamp >= ? AND timestamp <= ?"

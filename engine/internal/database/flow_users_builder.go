@@ -85,9 +85,8 @@ WHERE k < length(lbl_idx) AND path[lbl_idx[k]] != ''
 				query += fmt.Sprintf(`  AND %s = ? AND (k+1 <= length(lbl_idx) AND path[lbl_idx[k+1]] != '' AND %s = ?) `, sourceFormat, targetFormat)
 				originalArgs = append(originalArgs, sourceID, targetID)
 			}
-		} else if sourceID == "Dropoff-end" {
 			// All dropoffs (path ended here without going further)
-			query += fmt.Sprintf(`  AND k = length(lbl_idx) `)
+			query += "  AND k = length(lbl_idx) "
 		} else {
 			// Normal node search
 			query += fmt.Sprintf(`  AND (
@@ -125,7 +124,7 @@ WHERE i < length(path) AND path[i] != ''
 				originalArgs = append(originalArgs, sourceID, targetID)
 			}
 		} else if sourceID == "Dropoff-end" {
-			query += fmt.Sprintf(`  AND i = length(path) `)
+			query += "  AND i = length(path) "
 		} else {
 			query += fmt.Sprintf(`  AND (
         %s = ?

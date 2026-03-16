@@ -101,9 +101,8 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 	windowFunnelCall := fmt.Sprintf("windowFunnel(%d%s)(\n                timestamp,\n                %s\n            )", defaultWindowSeconds, modeArgs, strings.Join(conditions, ",\n                "))
 
 	// 3. Build WHERE clause
-	// Start with environment-agnostic properties first
-	whereStmt := "project_id = ?"
-	args = append(args, req.ProjectID)
+	whereStmt := "project_id = ? AND environment = ?"
+	args = append(args, req.ProjectID, req.Environment)
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
 		// Convert to UTC for ClickHouse comparison
@@ -394,9 +393,9 @@ func BuildSequenceMatchQuery(req models.FunnelRequest, windowSeconds int) (strin
 	}
 
 	// 3. Inner WHERE
-	whereStmt := "project_id = @project_id"
+	whereStmt := "project_id = @project_id AND environment = @environment"
 	var whereArgs []any
-	whereArgs = append(whereArgs, clickhouse.Named("project_id", req.ProjectID))
+	whereArgs = append(whereArgs, clickhouse.Named("project_id", req.ProjectID), clickhouse.Named("environment", req.Environment))
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
 		whereStmt += " AND timestamp >= @start_time AND timestamp <= @end_time"

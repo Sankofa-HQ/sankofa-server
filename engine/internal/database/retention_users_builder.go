@@ -32,8 +32,8 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 	}
 
 	// WHERE clause for project + global filters
-	whereStmt := "project_id = ?"
-	args = append(args, req.ProjectID)
+	whereStmt := "project_id = ? AND environment = ?"
+	args = append(args, req.ProjectID, req.Environment)
 	if len(req.GlobalFilters) > 0 {
 		gfStmt, gfArgs := buildFilterConds(req.GlobalFilters)
 		if gfStmt != "" {

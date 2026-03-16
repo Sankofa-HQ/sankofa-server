@@ -210,6 +210,7 @@ func (c *Cohort) BeforeCreate(tx *gorm.DB) (err error) {
 type SavedFunnel struct {
 	ID          string          `gorm:"primaryKey;type:varchar(32)" json:"id"`
 	ProjectID   string          `gorm:"not null;index;type:varchar(32)" json:"project_id"`
+	Environment string          `gorm:"default:'live';index" json:"environment"`
 	Name        string          `gorm:"not null" json:"name"`
 	Description string          `json:"description"`
 	QueryAST    json.RawMessage `gorm:"type:text" json:"query_ast"` // The FunnelsQueryAST
@@ -235,6 +236,7 @@ func (s *SavedFunnel) BeforeCreate(tx *gorm.DB) (err error) {
 type SavedInsight struct {
 	ID          string          `gorm:"primaryKey;type:varchar(32)" json:"id"`
 	ProjectID   string          `gorm:"not null;index;type:varchar(32)" json:"project_id"`
+	Environment string          `gorm:"default:'live';index" json:"environment"`
 	Name        string          `gorm:"not null" json:"name"`
 	Description string          `json:"description"`
 	QueryAST    json.RawMessage `gorm:"type:text" json:"query_ast"` // The InsightRequest AST
@@ -260,6 +262,7 @@ func (s *SavedInsight) BeforeCreate(tx *gorm.DB) (err error) {
 type SavedRetention struct {
 	ID          string          `gorm:"primaryKey;type:varchar(32)" json:"id"`
 	ProjectID   string          `gorm:"not null;index;type:varchar(32)" json:"project_id"`
+	Environment string          `gorm:"default:'live';index" json:"environment"`
 	Name        string          `gorm:"not null" json:"name"`
 	Description string          `json:"description"`
 	QueryAST    json.RawMessage `gorm:"type:text" json:"query_ast"` // The RetentionRequest AST
@@ -285,6 +288,7 @@ func (s *SavedRetention) BeforeCreate(tx *gorm.DB) (err error) {
 type SavedFlow struct {
 	ID          string          `gorm:"primaryKey;type:varchar(32)" json:"id"`
 	ProjectID   string          `gorm:"not null;index;type:varchar(32)" json:"project_id"`
+	Environment string          `gorm:"default:'live';index" json:"environment"`
 	Name        string          `gorm:"not null" json:"name"`
 	Description string          `json:"description"`
 	QueryAST    json.RawMessage `gorm:"type:text" json:"query_ast"` // The FlowRequest AST
