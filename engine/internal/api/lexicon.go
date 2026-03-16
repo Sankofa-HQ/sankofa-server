@@ -331,16 +331,17 @@ func (h *LexiconHandler) DeleteEvent(c *fiber.Ctx) error {
 	}
 	id := c.Params("id")
 
+	environment := c.Query("environment", "live")
 	return h.DB.Transaction(func(tx *gorm.DB) error {
 		var event database.LexiconEvent
-		if err := tx.Where("project_id = ? AND id = ?", project.ID, id).First(&event).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND id = ?", project.ID, environment, id).First(&event).Error; err != nil {
 			return err
 		}
 
 		// If this is a virtual event, we must unhide its children and detach them
 		if event.IsVirtual {
 			if err := tx.Model(&database.LexiconEvent{}).
-				Where("project_id = ? AND merged_into_id = ?", project.ID, event.ID).
+				Where("project_id = ? AND environment = ? AND merged_into_id = ?", project.ID, environment, event.ID).
 				Updates(map[string]interface{}{
 					"merged_into_id": gorm.Expr("NULL"),
 					"hidden":         false,
@@ -888,12 +889,18 @@ func (h *LexiconHandler) UpdateEventStatus(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "status must be pending, approved, or rejected"})
 	}
 
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	environment := c.Query("environment", "live")
+
 	updates := map[string]interface{}{
 		"status":     body.Status,
 		"hidden":     body.Status == "rejected",
 		"updated_at": time.Now(),
 	}
-	if err := h.DB.Model(&database.LexiconEvent{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := h.DB.Model(&database.LexiconEvent{}).Where("id = ? AND project_id = ? AND environment = ?", id, project.ID, environment).Updates(updates).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update status"})
 	}
 	return c.JSON(fiber.Map{"success": true, "status": body.Status})
@@ -912,12 +919,18 @@ func (h *LexiconHandler) UpdateEventPropertyStatus(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "status must be pending, approved, or rejected"})
 	}
 
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	environment := c.Query("environment", "live")
+
 	updates := map[string]interface{}{
 		"status":     body.Status,
 		"hidden":     body.Status == "rejected",
 		"updated_at": time.Now(),
 	}
-	if err := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ? AND project_id = ? AND environment = ?", id, project.ID, environment).Updates(updates).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update status"})
 	}
 	return c.JSON(fiber.Map{"success": true, "status": body.Status})
@@ -936,12 +949,18 @@ func (h *LexiconHandler) UpdateProfilePropertyStatus(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "status must be pending, approved, or rejected"})
 	}
 
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	environment := c.Query("environment", "live")
+
 	updates := map[string]interface{}{
 		"status":     body.Status,
 		"hidden":     body.Status == "rejected",
 		"updated_at": time.Now(),
 	}
-	if err := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ? AND project_id = ? AND environment = ?", id, project.ID, environment).Updates(updates).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update status"})
 	}
 	return c.JSON(fiber.Map{"success": true, "status": body.Status})
