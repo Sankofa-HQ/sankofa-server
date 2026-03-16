@@ -72,7 +72,7 @@ func (h *LexiconHandler) LexiconSummary(c *fiber.Ctx) error {
 	var eventCounts []statusCount
 	h.DB.Model(&database.LexiconEvent{}).
 		Select("status, count(*) as count").
-		Where("project_id = ? AND environment = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '') AND name NOT LIKE '$%'", project.ID, environment).
+		Where("project_id = ? AND environment = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '')", project.ID, environment).
 		Group("status").
 		Find(&eventCounts)
 
@@ -132,7 +132,7 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 
 	// 1. Get known events from Postgres
 	var dbEvents []database.LexiconEvent
-	if err := h.DB.Where("project_id = ? AND environment = ? AND name NOT LIKE '$%'", project.ID, environment).Find(&dbEvents).Error; err != nil {
+	if err := h.DB.Where("project_id = ? AND environment = ?", project.ID, environment).Find(&dbEvents).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch events from DB"})
 	}
 
@@ -144,7 +144,7 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 	query := `
 		SELECT DISTINCT event_name
 		FROM events
-		WHERE project_id = ? AND environment = ? AND event_name NOT LIKE '$%'
+		WHERE project_id = ? AND environment = ?
 	`
 	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
 	if err != nil {
@@ -182,7 +182,7 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 				log.Println("Failed to auto-create events:", err)
 			} else {
 				// Re-fetch to get IDs
-				h.DB.Where("project_id = ? AND environment = ? AND name NOT LIKE '$%'", project.ID, environment).Find(&dbEvents)
+				h.DB.Where("project_id = ? AND environment = ?", project.ID, environment).Find(&dbEvents)
 			}
 		}
 	}
