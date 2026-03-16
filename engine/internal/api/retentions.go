@@ -52,14 +52,14 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 	}
 
 	// Expand Events
-	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.StartEvent})
 	if len(expandedStart) > 0 {
 		req.ExpandedStartEvent = expandedStart
 	} else {
 		req.ExpandedStartEvent = []string{req.StartEvent}
 	}
 
-	expandedReturn := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.ReturnEvent})
+	expandedReturn := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.ReturnEvent})
 	if len(expandedReturn) > 0 {
 		req.ExpandedReturnEvent = expandedReturn
 	} else {
@@ -68,7 +68,7 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 
 	// Filter Expansions
 	for i, f := range req.GlobalFilters {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
 		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 			req.GlobalFilters[i].ExpandedProperties = expanded
 		}
@@ -76,7 +76,7 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 
 	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
 	for i, bd := range req.Breakdowns {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, bd)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, bd)
 		if len(expanded) == 0 {
 			expanded = []string{bd}
 		}
@@ -214,14 +214,14 @@ func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
 	}
 
 	// Expand events
-	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+	expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.StartEvent})
 	if len(expandedStart) > 0 {
 		req.ExpandedStartEvent = expandedStart
 	} else {
 		req.ExpandedStartEvent = []string{req.StartEvent}
 	}
 
-	expandedReturn := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.ReturnEvent})
+	expandedReturn := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.ReturnEvent})
 	if len(expandedReturn) > 0 {
 		req.ExpandedReturnEvent = expandedReturn
 	} else {
@@ -230,7 +230,7 @@ func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
 
 	// Expand global filters
 	for i, f := range req.GlobalFilters {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
 		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 			req.GlobalFilters[i].ExpandedProperties = expanded
 		}

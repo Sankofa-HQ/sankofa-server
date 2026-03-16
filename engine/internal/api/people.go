@@ -417,7 +417,7 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 					// 2. Build Subquery for Events
 					// SELECT distinct_id FROM events WHERE ... GROUP BY distinct_id HAVING ...
 
-					expandedNames := ExpandVirtualEventNames(h.DB, projID, []string{f.EventName})
+					expandedNames := ExpandVirtualEventNames(h.DB, projID, environment, []string{f.EventName})
 					placeholders := make([]string, len(expandedNames))
 					subArgs := []interface{}{projID, environment}
 					for i, name := range expandedNames {
@@ -964,7 +964,7 @@ func (h *PeopleHandler) GetPropertyKeys(c *fiber.Ctx) error {
 		keys = []string{}
 	}
 
-	keys = applyLexiconToProfileProperties(h.DB, project.ID, keys)
+	keys = applyLexiconToProfileProperties(h.DB, project.ID, environment, keys)
 
 	return c.JSON(fiber.Map{"keys": keys})
 }
@@ -972,7 +972,7 @@ func (h *PeopleHandler) GetPropertyKeys(c *fiber.Ctx) error {
 // applyLexiconToProfileProperties takes a list of raw profile property keys from ClickHouse,
 // maps them against the LexiconProfileProperty table in SQLite, hides any properties that are merged
 // into a virtual property, and adds the virtual properties themselves if they aren't already included.
-func applyLexiconToProfileProperties(db *gorm.DB, projectID string, rawKeys []string) []string {
+func applyLexiconToProfileProperties(db *gorm.DB, projectID string, environment string, rawKeys []string) []string {
 	if len(rawKeys) == 0 {
 		return rawKeys
 	}
@@ -983,7 +983,7 @@ func applyLexiconToProfileProperties(db *gorm.DB, projectID string, rawKeys []st
 	}
 
 	var allLexiconProps []database.LexiconProfileProperty
-	if err := db.Where("project_id = ?", projectID).Find(&allLexiconProps).Error; err != nil {
+	if err := db.Where("project_id = ? AND environment = ?", projectID, environment).Find(&allLexiconProps).Error; err != nil {
 		return rawKeys
 	}
 

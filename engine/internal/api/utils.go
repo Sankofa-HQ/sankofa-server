@@ -94,14 +94,14 @@ func ParseTimeRangeSql(colName string, timeStr string) (string, []interface{}) {
 
 // ExpandVirtualEventNames takes a slice of requested event names,
 // looks them up in Lexicon, and replaces any virtual events with their child event names.
-func ExpandVirtualEventNames(db *gorm.DB, projectID string, eventNames []string) []string {
+func ExpandVirtualEventNames(db *gorm.DB, projectID string, environment string, eventNames []string) []string {
 	if len(eventNames) == 0 {
 		return eventNames
 	}
 
 	// Fetch all virtual events matching these names
 	var virtualEvents []database.LexiconEvent
-	db.Where("project_id = ? AND is_virtual = ? AND name IN ?", projectID, true, eventNames).Find(&virtualEvents)
+	db.Where("project_id = ? AND environment = ? AND is_virtual = ? AND name IN ?", projectID, environment, true, eventNames).Find(&virtualEvents)
 
 	if len(virtualEvents) == 0 {
 		return eventNames // No translation needed
@@ -116,7 +116,7 @@ func ExpandVirtualEventNames(db *gorm.DB, projectID string, eventNames []string)
 
 	// Fetch children
 	var children []database.LexiconEvent
-	db.Where("project_id = ? AND merged_into_id IN ?", projectID, virtualIDs).Find(&children)
+	db.Where("project_id = ? AND environment = ? AND merged_into_id IN ?", projectID, environment, virtualIDs).Find(&children)
 
 	expandedNames := []string{}
 

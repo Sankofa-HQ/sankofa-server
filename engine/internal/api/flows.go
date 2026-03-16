@@ -57,7 +57,7 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 	ctx := c.Context()
 	if len(req.Steps) > 0 && req.Steps[0].EventName != "" {
 		// Multi-step mode: expand the FIRST step's event for virtual event matching
-		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.Steps[0].EventName})
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.Steps[0].EventName})
 		if len(expandedStart) > 0 {
 			req.StartEventExpanded = expandedStart
 		} else {
@@ -65,7 +65,7 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		}
 	} else if req.StartEvent != "" {
 		// Legacy mode: expand start_event
-		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.StartEvent})
 		if len(expandedStart) > 0 {
 			req.StartEventExpanded = expandedStart
 		} else {
@@ -154,14 +154,14 @@ func (h *FlowsHandler) FlowUsers(c *fiber.Ctx) error {
 
 	// Expand virtual/merged events for the primary anchor
 	if len(req.Steps) > 0 && req.Steps[0].EventName != "" {
-		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.Steps[0].EventName})
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.Steps[0].EventName})
 		if len(expandedStart) > 0 {
 			req.StartEventExpanded = expandedStart
 		} else {
 			req.StartEventExpanded = []string{req.Steps[0].EventName}
 		}
 	} else if req.StartEvent != "" {
-		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, []string{req.StartEvent})
+		expandedStart := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{req.StartEvent})
 		if len(expandedStart) > 0 {
 			req.StartEventExpanded = expandedStart
 		} else {

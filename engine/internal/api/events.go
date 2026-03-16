@@ -290,7 +290,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 
 			// Event Name filter
 			if q.EventName != "" {
-				expanded := ExpandVirtualEventNames(h.DB, projID, []string{q.EventName})
+				expanded := ExpandVirtualEventNames(h.DB, projID, environment, []string{q.EventName})
 				if len(expanded) == 1 {
 					andClauses = append(andClauses, "event_name = ?")
 					queryArgs = append(queryArgs, expanded[0])
@@ -397,7 +397,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							propArgs = append(propArgs, f.Value)
 						case "is", "=":
 							if col == "event_name" {
-								expanded := ExpandVirtualEventNames(h.DB, projID, []string{f.Value})
+								expanded := ExpandVirtualEventNames(h.DB, projID, environment, []string{f.Value})
 								if len(expanded) == 1 {
 									propClauses = append(propClauses, fmt.Sprintf("%s = ?", targetCol))
 									propArgs = append(propArgs, expanded[0])
@@ -415,7 +415,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							}
 						case "is_not", "!=":
 							if col == "event_name" {
-								expanded := ExpandVirtualEventNames(h.DB, projID, []string{f.Value})
+								expanded := ExpandVirtualEventNames(h.DB, projID, environment, []string{f.Value})
 								if len(expanded) == 1 {
 									propClauses = append(propClauses, fmt.Sprintf("%s != ?", targetCol))
 									propArgs = append(propArgs, expanded[0])
@@ -469,7 +469,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 							var vals []string
 							if err := json.Unmarshal([]byte(f.Value), &vals); err == nil && len(vals) > 0 {
 								if col == "event_name" {
-									vals = ExpandVirtualEventNames(h.DB, projID, vals)
+									vals = ExpandVirtualEventNames(h.DB, projID, environment, vals)
 								}
 								placeholders := strings.Repeat("?,", len(vals)-1) + "?"
 								propClauses = append(propClauses, fmt.Sprintf("%s IN (%s)", targetCol, placeholders))
@@ -699,8 +699,9 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 
 	// Fetch from Lexicon (SQLite) - The "Gatekeeper" source of truth
 	var totalLexiconEvents int64
+	environment := c.Query("environment", "live")
 
-	lexiconQuery := h.DB.Model(&database.LexiconEvent{}).Where("project_id = ?", project.ID)
+	lexiconQuery := h.DB.Model(&database.LexiconEvent{}).Where("project_id = ? AND environment = ?", project.ID, environment)
 	if hideSystem {
 		lexiconQuery = lexiconQuery.Where("name NOT LIKE '$%'")
 	}
@@ -712,7 +713,7 @@ func (h *EventsHandler) GetEventNames(c *fiber.Ctx) error {
 		var lexiconEvents []database.LexiconEvent
 
 		query := h.DB.Model(&database.LexiconEvent{}).
-			Where("project_id = ? AND status = ? AND hidden = ?", project.ID, "approved", false)
+			Where("project_id = ? AND environment = ? AND status = ? AND hidden = ?", project.ID, environment, "approved", false)
 
 		if hideSystem {
 			query = query.Where("name NOT LIKE '$%'")
@@ -927,7 +928,7 @@ func (h *EventsHandler) GetEventCounts(c *fiber.Ctx) error {
 
 	// Fetch Lexicon visibility rules
 	var lexEvents []database.LexiconEvent
-	h.DB.Select("name, status, hidden").Where("project_id = ?", projID).Find(&lexEvents)
+	h.DB.Select("name, status, hidden").Where("project_id = ? AND environment = ?", projID, environment).Find(&lexEvents)
 
 	lexiconActive := len(lexEvents) > 0
 	allowMap := make(map[string]bool)
@@ -1004,7 +1005,7 @@ func (h *EventsHandler) GetEventValues(c *fiber.Ctx) error {
 	// Expand merged/virtual event names
 	var expandedEventNames []string
 	if eventName != "" {
-		expandedEventNames = ExpandVirtualEventNames(h.DB, project.ID, []string{eventName})
+		expandedEventNames = ExpandVirtualEventNames(h.DB, project.ID, environment, []string{eventName})
 		if len(expandedEventNames) == 0 {
 			expandedEventNames = []string{eventName}
 		}

@@ -135,7 +135,7 @@ func buildFiltersSQL(db *gorm.DB, projectID string, env string, filters []Filter
 			args = append(args, subArgs...)
 
 		} else if f.FilterType == "event" {
-			expandedNames := ExpandVirtualEventNames(db, projectID, []string{f.EventName})
+			expandedNames := ExpandVirtualEventNames(db, projectID, env, []string{f.EventName})
 			placeholders := make([]string, len(expandedNames))
 			eventArgs := []interface{}{projectID, env}
 			for i, name := range expandedNames {

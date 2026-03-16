@@ -58,7 +58,7 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	// Evaluate merged events
 	for i, step := range req.Steps {
 		if step.EventName != "" {
-			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, []string{step.EventName})
+			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{step.EventName})
 			if len(expanded) > 0 {
 				req.Steps[i].ExpandedEvents = expanded
 			} else {
@@ -71,7 +71,7 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	fmt.Printf("=== Funnel GlobalFilters (%d) ===\n", len(req.GlobalFilters))
 	for i, f := range req.GlobalFilters {
 		fmt.Printf("  Filter[%d]: property=%q operator=%q values=%v\n", i, f.Property, f.Operator, f.Values)
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
 		fmt.Printf("  Filter[%d]: expanded=%v\n", i, expanded)
 		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 			req.GlobalFilters[i].ExpandedProperties = expanded
@@ -81,7 +81,7 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	// Expand virtual/merged property names in per-step filters
 	for si, step := range req.Steps {
 		for fi, f := range step.Filters {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
 			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 				req.Steps[si].Filters[fi].ExpandedProperties = expanded
 			}
@@ -91,7 +91,7 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	// Expand virtual/merged property names in breakdowns
 	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
 	for i, bd := range req.Breakdowns {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, bd)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, bd)
 		if len(expanded) == 0 {
 			expanded = []string{bd} // fallback to raw key
 		}
@@ -209,7 +209,7 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 	// Expand merged events
 	for i, step := range req.Steps {
 		if step.EventName != "" {
-			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, []string{step.EventName})
+			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, []string{step.EventName})
 			if len(expanded) > 0 {
 				req.Steps[i].ExpandedEvents = expanded
 			} else {
@@ -220,7 +220,7 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 
 	// Expand virtual/merged property names in global filters
 	for i, f := range req.GlobalFilters {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
 		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 			req.GlobalFilters[i].ExpandedProperties = expanded
 		}
@@ -229,7 +229,7 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 	// Expand virtual/merged property names in per-step filters
 	for si, step := range req.Steps {
 		for fi, f := range step.Filters {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, f.Property)
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
 			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
 				req.Steps[si].Filters[fi].ExpandedProperties = expanded
 			}
@@ -239,7 +239,7 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 	// Expand virtual/merged property names in breakdowns
 	req.ExpandedBreakdowns = make([][]string, len(req.Breakdowns))
 	for i, bd := range req.Breakdowns {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, bd)
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, bd)
 		if len(expanded) == 0 {
 			expanded = []string{bd}
 		}
