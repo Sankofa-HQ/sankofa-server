@@ -61,6 +61,7 @@ func (h *LexiconHandler) LexiconSummary(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	environment := c.Query("environment", "live")
 
 	type statusCount struct {
 		Status string `json:"status"`
@@ -71,7 +72,7 @@ func (h *LexiconHandler) LexiconSummary(c *fiber.Ctx) error {
 	var eventCounts []statusCount
 	h.DB.Model(&database.LexiconEvent{}).
 		Select("status, count(*) as count").
-		Where("project_id = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '') AND name NOT LIKE '$%'", project.ID).
+		Where("project_id = ? AND environment = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '') AND name NOT LIKE '$%'", project.ID, environment).
 		Group("status").
 		Find(&eventCounts)
 
@@ -79,7 +80,7 @@ func (h *LexiconHandler) LexiconSummary(c *fiber.Ctx) error {
 	var propCounts []statusCount
 	h.DB.Model(&database.LexiconEventProperty{}).
 		Select("status, count(*) as count").
-		Where("project_id = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '')", project.ID).
+		Where("project_id = ? AND environment = ? AND is_virtual = false AND (merged_into_id IS NULL OR merged_into_id = '')", project.ID, environment).
 		Group("status").
 		Find(&propCounts)
 
@@ -127,18 +128,17 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	environment := c.Query("environment", "live")
 
 	// 1. Get known events from Postgres
 	var dbEvents []database.LexiconEvent
-	if err := h.DB.Where("project_id = ? AND name NOT LIKE '$%'", project.ID).Find(&dbEvents).Error; err != nil {
+	if err := h.DB.Where("project_id = ? AND environment = ? AND name NOT LIKE '$%'", project.ID, environment).Find(&dbEvents).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch events from DB"})
 	}
 
 	// 2. Get raw events from ClickHouse (Sync)
 	// We only sync if requested or periodically, but for now let's do a lightweight check
 	// actually, for a responsive UI, we should upsert missing ones.
-
-	environment := c.Query("environment", "live")
 
 	// ClickHouse Query for unique event names
 	query := `
@@ -166,6 +166,7 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 				if !knownMap[name] && name != "" {
 					newEvents = append(newEvents, database.LexiconEvent{
 						ProjectID:   project.ID,
+						Environment: environment,
 						Name:        name,
 						DisplayName: getNameFromKey(name), // Auto-generate display name
 						CreatedAt:   time.Now(),
@@ -181,7 +182,7 @@ func (h *LexiconHandler) ListEvents(c *fiber.Ctx) error {
 				log.Println("Failed to auto-create events:", err)
 			} else {
 				// Re-fetch to get IDs
-				h.DB.Where("project_id = ? AND name NOT LIKE '$%'", project.ID).Find(&dbEvents)
+				h.DB.Where("project_id = ? AND environment = ? AND name NOT LIKE '$%'", project.ID, environment).Find(&dbEvents)
 			}
 		}
 	}
@@ -245,7 +246,13 @@ func (h *LexiconHandler) UpdateEvent(c *fiber.Ctx) error {
 		}
 	}
 
-	result := h.DB.Model(&database.LexiconEvent{}).Where("id = ?", id).Updates(updates)
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	environment := c.Query("environment", "live")
+
+	result := h.DB.Model(&database.LexiconEvent{}).Where("id = ? AND project_id = ? AND environment = ?", id, project.ID, environment).Updates(updates)
 	if result.Error != nil {
 		log.Println("❌ Update Event Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
@@ -275,9 +282,11 @@ func (h *LexiconHandler) MergeEvents(c *fiber.Ctx) error {
 	}
 
 	return h.DB.Transaction(func(tx *gorm.DB) error {
+		environment := c.Query("environment", "live")
 		// 1. Create the new virtual event
 		virtualEvent := database.LexiconEvent{
 			ProjectID:   project.ID,
+			Environment: environment,
 			Name:        fmt.Sprintf("merged_%d", time.Now().UnixNano()), // Unique internal name
 			DisplayName: req.NewDisplayName,
 			IsVirtual:   true,
@@ -289,9 +298,9 @@ func (h *LexiconHandler) MergeEvents(c *fiber.Ctx) error {
 			return err
 		}
 
-		// 2. Fetch the target events to verify they exist and belong to the project
+		// 2. Fetch the target events to verify they exist and belong to the project/environment
 		var targetEvents []database.LexiconEvent
-		if err := tx.Where("project_id = ? AND id IN ?", project.ID, req.EventIDs).Find(&targetEvents).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND id IN ?", project.ID, environment, req.EventIDs).Find(&targetEvents).Error; err != nil {
 			return err
 		}
 
@@ -301,7 +310,7 @@ func (h *LexiconHandler) MergeEvents(c *fiber.Ctx) error {
 
 		// 3. Update the target events
 		if err := tx.Model(&database.LexiconEvent{}).
-			Where("id IN ?", req.EventIDs).
+			Where("project_id = ? AND environment = ? AND id IN ?", project.ID, environment, req.EventIDs).
 			Updates(map[string]interface{}{
 				"merged_into_id": virtualEvent.ID,
 				"hidden":         true, // Hide merged children from UI
@@ -357,9 +366,10 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	environment := c.Query("environment", "live")
 
 	var allProps []database.LexiconEventProperty
-	if err := h.DB.Where("project_id = ?", project.ID).Find(&allProps).Error; err != nil {
+	if err := h.DB.Where("project_id = ? AND environment = ?", project.ID, environment).Find(&allProps).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "DB Error"})
 	}
 
@@ -397,10 +407,10 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 	query := `
 		SELECT DISTINCT arrayJoin(arrayConcat(mapKeys(properties), mapKeys(default_properties))) as key
 		FROM events
-		WHERE project_id = ?
+		WHERE project_id = ? AND environment = ?
 		LIMIT 1000
 	`
-	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID))
+	rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
 	if err != nil {
 		log.Println("⚠️ ClickHouse Property Sync Error:", err)
 		// Return what we have in DB even if sync fails
@@ -427,6 +437,7 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 
 				newProps = append(newProps, database.LexiconEventProperty{
 					ProjectID:   project.ID,
+					Environment: environment,
 					Name:        key,
 					DisplayName: getNameFromKey(key),
 					Type:        pType,
@@ -443,7 +454,7 @@ func (h *LexiconHandler) ListEventProperties(c *fiber.Ctx) error {
 			log.Println("Failed to save new properties:", err)
 		} else {
 			// Refresh list
-			h.DB.Where("project_id = ?", project.ID).Find(&props)
+			h.DB.Where("project_id = ? AND environment = ?", project.ID, environment).Find(&props)
 		}
 	}
 
@@ -506,7 +517,13 @@ func (h *LexiconHandler) UpdateEventProperty(c *fiber.Ctx) error {
 		}
 	}
 
-	result := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ?", id).Updates(updates)
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	environment := c.Query("environment", "live")
+
+	result := h.DB.Model(&database.LexiconEventProperty{}).Where("id = ? AND project_id = ? AND environment = ?", id, project.ID, environment).Updates(updates)
 	if result.Error != nil {
 		log.Println("❌ Update Event Property Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
@@ -535,9 +552,11 @@ func (h *LexiconHandler) MergeEventProperties(c *fiber.Ctx) error {
 	}
 
 	return h.DB.Transaction(func(tx *gorm.DB) error {
+		environment := c.Query("environment", "live")
 		// 1. Create the new virtual property
 		virtualProp := database.LexiconEventProperty{
 			ProjectID:   project.ID,
+			Environment: environment,
 			Name:        fmt.Sprintf("merged_prop_%d", time.Now().UnixNano()),
 			DisplayName: req.NewDisplayName,
 			IsVirtual:   true,
@@ -552,7 +571,7 @@ func (h *LexiconHandler) MergeEventProperties(c *fiber.Ctx) error {
 
 		// 2. Fetch target properties
 		var targetProps []database.LexiconEventProperty
-		if err := tx.Where("project_id = ? AND id IN ?", project.ID, req.PropertyIDs).Find(&targetProps).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND id IN ?", project.ID, environment, req.PropertyIDs).Find(&targetProps).Error; err != nil {
 			return err
 		}
 
@@ -562,7 +581,7 @@ func (h *LexiconHandler) MergeEventProperties(c *fiber.Ctx) error {
 
 		// 3. Update target properties
 		if err := tx.Model(&database.LexiconEventProperty{}).
-			Where("id IN ?", req.PropertyIDs).
+			Where("project_id = ? AND environment = ? AND id IN ?", project.ID, environment, req.PropertyIDs).
 			Updates(map[string]interface{}{
 				"merged_into_id": virtualProp.ID,
 				"hidden":         true,
@@ -581,17 +600,18 @@ func (h *LexiconHandler) DeleteEventProperty(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	environment := c.Query("environment", "live")
 	id := c.Params("id")
 
 	return h.DB.Transaction(func(tx *gorm.DB) error {
 		var prop database.LexiconEventProperty
-		if err := tx.Where("project_id = ? AND id = ?", project.ID, id).First(&prop).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND id = ?", project.ID, environment, id).First(&prop).Error; err != nil {
 			return err
 		}
 
 		if prop.IsVirtual {
 			if err := tx.Model(&database.LexiconEventProperty{}).
-				Where("project_id = ? AND merged_into_id = ?", project.ID, prop.ID).
+				Where("project_id = ? AND environment = ? AND merged_into_id = ?", project.ID, environment, prop.ID).
 				Updates(map[string]interface{}{
 					"merged_into_id": gorm.Expr("NULL"),
 					"hidden":         false,
@@ -616,11 +636,11 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
-
+	environment := c.Query("environment", "live")
 	entityType := c.Query("type", "User") // User or Company
 
 	var props []database.LexiconProfileProperty
-	if err := h.DB.Where("project_id = ? AND entity_type = ?", project.ID, entityType).Find(&props).Error; err != nil {
+	if err := h.DB.Where("project_id = ? AND environment = ? AND entity_type = ?", project.ID, environment, entityType).Find(&props).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "DB Error"})
 	}
 
@@ -630,10 +650,10 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 		query := `
 			SELECT arrayJoin(mapKeys(properties)) as key
 			FROM persons
-			WHERE project_id = ?
+			WHERE project_id = ? AND environment = ?
 			LIMIT 1000
 		`
-		rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID))
+		rows, err := h.CH.Query(context.Background(), query, fmt.Sprint(project.ID), environment)
 		if err == nil {
 			defer rows.Close()
 			knownMap := make(map[string]bool)
@@ -651,6 +671,7 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 						seenInBatch[key] = true
 						newProps = append(newProps, database.LexiconProfileProperty{
 							ProjectID:   project.ID,
+							Environment: environment,
 							EntityType:  "User",
 							Name:        key,
 							DisplayName: getNameFromKey(key),
@@ -666,7 +687,7 @@ func (h *LexiconHandler) ListProfileProperties(c *fiber.Ctx) error {
 				if err := h.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&newProps).Error; err != nil {
 					log.Println("⚠️ Failed to insert new Profile Properties:", err)
 				} else {
-					h.DB.Where("project_id = ? AND entity_type = ?", project.ID, entityType).Find(&props)
+					h.DB.Where("project_id = ? AND environment = ? AND entity_type = ?", project.ID, environment, entityType).Find(&props)
 				}
 			}
 		} else {
@@ -733,7 +754,13 @@ func (h *LexiconHandler) UpdateProfileProperty(c *fiber.Ctx) error {
 		}
 	}
 
-	result := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ?", id).Updates(updates)
+	project, err := h.getProjectFromContext(c)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	environment := c.Query("environment", "live")
+
+	result := h.DB.Model(&database.LexiconProfileProperty{}).Where("id = ? AND project_id = ? AND environment = ?", id, project.ID, environment).Updates(updates)
 	if result.Error != nil {
 		log.Println("❌ Update Profile Property Error:", result.Error)
 		return c.Status(500).JSON(fiber.Map{"error": "Update failed"})
@@ -762,15 +789,17 @@ func (h *LexiconHandler) MergeProfileProperties(c *fiber.Ctx) error {
 	}
 
 	return h.DB.Transaction(func(tx *gorm.DB) error {
+		environment := c.Query("environment", "live")
 		// Determine EntityType from one of the targets
 		var firstTarget database.LexiconProfileProperty
-		if err := tx.Where("project_id = ? AND id = ?", project.ID, req.PropertyIDs[0]).First(&firstTarget).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND id = ?", project.ID, environment, req.PropertyIDs[0]).First(&firstTarget).Error; err != nil {
 			return err
 		}
 
 		// 1. Create the new virtual property
 		virtualProp := database.LexiconProfileProperty{
 			ProjectID:   project.ID,
+			Environment: environment,
 			EntityType:  firstTarget.EntityType,
 			Name:        fmt.Sprintf("merged_prof_prop_%d", time.Now().UnixNano()),
 			DisplayName: req.NewDisplayName,
@@ -786,7 +815,7 @@ func (h *LexiconHandler) MergeProfileProperties(c *fiber.Ctx) error {
 
 		// 2. Fetch target properties ensuring they match EntityType
 		var targetProps []database.LexiconProfileProperty
-		if err := tx.Where("project_id = ? AND entity_type = ? AND id IN ?", project.ID, firstTarget.EntityType, req.PropertyIDs).Find(&targetProps).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND entity_type = ? AND id IN ?", project.ID, environment, firstTarget.EntityType, req.PropertyIDs).Find(&targetProps).Error; err != nil {
 			return err
 		}
 
@@ -796,7 +825,7 @@ func (h *LexiconHandler) MergeProfileProperties(c *fiber.Ctx) error {
 
 		// 3. Update target properties
 		if err := tx.Model(&database.LexiconProfileProperty{}).
-			Where("id IN ?", req.PropertyIDs).
+			Where("project_id = ? AND environment = ? AND id IN ?", project.ID, environment, req.PropertyIDs).
 			Updates(map[string]interface{}{
 				"merged_into_id": virtualProp.ID,
 				"hidden":         true,
@@ -815,17 +844,18 @@ func (h *LexiconHandler) DeleteProfileProperty(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	environment := c.Query("environment", "live")
 	id := c.Params("id")
 
 	return h.DB.Transaction(func(tx *gorm.DB) error {
 		var prop database.LexiconProfileProperty
-		if err := tx.Where("project_id = ? AND id = ?", project.ID, id).First(&prop).Error; err != nil {
+		if err := tx.Where("project_id = ? AND environment = ? AND id = ?", project.ID, environment, id).First(&prop).Error; err != nil {
 			return err
 		}
 
 		if prop.IsVirtual {
 			if err := tx.Model(&database.LexiconProfileProperty{}).
-				Where("project_id = ? AND merged_into_id = ?", project.ID, prop.ID).
+				Where("project_id = ? AND environment = ? AND merged_into_id = ?", project.ID, environment, prop.ID).
 				Updates(map[string]interface{}{
 					"merged_into_id": gorm.Expr("NULL"),
 					"hidden":         false,

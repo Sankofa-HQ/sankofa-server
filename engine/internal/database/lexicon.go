@@ -10,9 +10,10 @@ import (
 // LexiconEvent represents a tracked event in the system.
 type LexiconEvent struct {
 	ID           string      `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_event_name;type:varchar(32)" json:"project_id"`
-	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_event_name" json:"name"` // The raw event name (e.g., "signup_completed")
-	DisplayName  string      `json:"display_name"`                                                  // Friendly name (e.g., "Sign Up Completed")
+	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_env_event_name;type:varchar(32)" json:"project_id"`
+	Environment  string      `gorm:"default:'live';index;uniqueIndex:idx_project_env_event_name" json:"environment"`
+	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_env_event_name" json:"name"` // The raw event name (e.g., "signup_completed")
+	DisplayName  string      `json:"display_name"`                                                     // Friendly name (e.g., "Sign Up Completed")
 	Description  string      `json:"description"`
 	Status       string      `gorm:"default:'approved';index" json:"status"` // 'pending', 'approved', 'rejected'
 	Hidden       bool        `gorm:"default:false" json:"hidden"`            // Legacy: now mapped by status=rejected
@@ -39,9 +40,10 @@ func (e *LexiconEvent) BeforeCreate(tx *gorm.DB) (err error) {
 // LexiconEventProperty represents a property associated with an event.
 type LexiconEventProperty struct {
 	ID           string      `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_event_prop_name;type:varchar(32)" json:"project_id"`
-	EventID      *string     `gorm:"index;uniqueIndex:idx_project_event_prop_name;type:varchar(32)" json:"event_id"` // Null for global properties, set for event-specific
-	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_event_prop_name" json:"name"`             // The raw property name (e.g., "browser")
+	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_env_event_prop_name;type:varchar(32)" json:"project_id"`
+	Environment  string      `gorm:"default:'live';index;uniqueIndex:idx_project_env_event_prop_name" json:"environment"`
+	EventID      *string     `gorm:"index;uniqueIndex:idx_project_env_event_prop_name;type:varchar(32)" json:"event_id"` // Null for global properties, set for event-specific
+	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_env_event_prop_name" json:"name"`             // The raw property name (e.g., "browser")
 	DisplayName  string      `json:"display_name"`
 	Description  string      `json:"description"`
 	ExampleValue string      `json:"example_value"`                          // Sample value for documentation
@@ -70,9 +72,10 @@ func (p *LexiconEventProperty) BeforeCreate(tx *gorm.DB) (err error) {
 // LexiconProfileProperty represents a property associated with a User or Company profile.
 type LexiconProfileProperty struct {
 	ID           string      `gorm:"primaryKey;type:varchar(32)" json:"id"`
-	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_profile_prop_name;type:varchar(32)" json:"project_id"`
-	EntityType   string      `gorm:"default:'User';uniqueIndex:idx_project_profile_prop_name" json:"entity_type"` // 'User' or 'Company'
-	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_profile_prop_name" json:"name"`        // The raw property name (e.g., "email", "plan")
+	ProjectID    string      `gorm:"not null;index;uniqueIndex:idx_project_env_profile_prop_name;type:varchar(32)" json:"project_id"`
+	Environment  string      `gorm:"default:'live';index;uniqueIndex:idx_project_env_profile_prop_name" json:"environment"`
+	EntityType   string      `gorm:"default:'User';uniqueIndex:idx_project_env_profile_prop_name" json:"entity_type"` // 'User' or 'Company'
+	Name         string      `gorm:"not null;index;uniqueIndex:idx_project_env_profile_prop_name" json:"name"`        // The raw property name (e.g., "email", "plan")
 	DisplayName  string      `json:"display_name"`
 	Description  string      `json:"description"`
 	ExampleValue string      `json:"example_value"`
