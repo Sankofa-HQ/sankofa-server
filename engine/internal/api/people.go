@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -674,7 +675,11 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 
 // GetPerson - GET /api/v1/people/:id
 func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
-	distinctID := c.Params("id")
+	distinctID := strings.TrimSpace(c.Params("id"))
+	if decoded, err := url.PathUnescape(distinctID); err == nil {
+		distinctID = decoded
+	}
+
 	if distinctID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing distinct_id"})
 	}
@@ -709,140 +714,99 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 	environment := c.Query("environment", "live")
 	projID := project.ID
 
-	// 2. Resolve alias chain: follow alias_id -> distinct_id links recursively
-	// The SDK creates aliases like: alias_id = previousID, distinct_id = newUserID
-	// So the chain is: user_88 -> user_304 -> user_532 -> anonymous_uuid (person row)
-	// We need to follow the chain: given distinct_id in aliases, get alias_id, repeat
-	canonicalID := distinctID
+	// 2. Resolve ALL IDs in the alias chain
+	allIDs := h.resolveAllAliasedIDs(projID, environment, distinctID)
 
-	// First, check if the person exists directly with this distinct_id
-	var directCount uint64
-	h.CH.QueryRow(context.Background(),
-		"SELECT count() FROM persons WHERE project_id = ? AND environment = ? AND distinct_id = ?",
-		projID, environment, distinctID,
-	).Scan(&directCount)
-
-	if directCount == 0 {
-		// Person doesn't exist directly — resolve alias chain (max 10 hops to prevent loops)
-		currentID := distinctID
-		visited := map[string]bool{currentID: true}
-
-		for i := 0; i < 10; i++ {
-			var resolvedID string
-			err := h.CH.QueryRow(context.Background(),
-				"SELECT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ? LIMIT 1",
-				projID, environment, currentID,
-			).Scan(&resolvedID)
-
-			if err != nil || resolvedID == "" {
-				break // No more aliases to follow
-			}
-			if visited[resolvedID] {
-				break // Prevent infinite loop
-			}
-
-			visited[resolvedID] = true
-			currentID = resolvedID
-			log.Printf("Alias chain: %s -> %s", canonicalID, currentID)
-		}
-		canonicalID = currentID
-		if canonicalID != distinctID {
-			log.Printf("Alias fully resolved: %s -> %s", distinctID, canonicalID)
-		}
+	// 3. Query ClickHouse for all IDs in the chain
+	var p PersonProfile
+	placeholders := make([]string, len(allIDs))
+	queryArgs := []interface{}{projID, environment}
+	for i, id := range allIDs {
+		placeholders[i] = "?"
+		queryArgs = append(queryArgs, id)
 	}
 
-	// 3. Fetch Person from ClickHouse (deduplicated via argMax)
-	query := `
+	query := fmt.Sprintf(`
 		SELECT 
-			p.distinct_id,
-			p.props AS properties,
-			p.latest_seen AS last_seen,
-			groupArray(pa.alias_id) as aliases
-		FROM (
-			SELECT 
-				distinct_id,
-				argMax(properties, last_seen) AS props,
-				max(last_seen) AS latest_seen
-			FROM persons
-			WHERE project_id = ? AND environment = ? AND distinct_id = ?
-			GROUP BY distinct_id
-		) p
-		LEFT JOIN person_aliases pa 
-			ON p.distinct_id = pa.distinct_id
-		GROUP BY p.distinct_id, p.props, p.latest_seen
-		LIMIT 1
-	`
+			distinct_id,
+			properties,
+			last_seen
+		FROM persons
+		WHERE project_id = ? AND environment = ? AND distinct_id IN (%s)
+		ORDER BY last_seen DESC
+	`, strings.Join(placeholders, ","))
 
-	var p PersonProfile
-	if err := h.CH.QueryRow(context.Background(), query, projID, environment, canonicalID).Scan(
-		&p.DistinctID, &p.Properties, &p.LastSeen, &p.Aliases,
-	); err != nil {
-		// Person not found in persons table — try to create a stub from events
-		log.Printf("Person %s (canonical: %s) not in persons table, checking events...", distinctID, canonicalID)
-
-		// Check if this distinct_id (or any ID in the alias chain) has events
-		idsToCheck := []string{distinctID, canonicalID}
-		var lastSeen time.Time
-		var foundDistinctID string
-
-		for _, checkID := range idsToCheck {
-			err2 := h.CH.QueryRow(context.Background(),
-				"SELECT distinct_id, max(timestamp) FROM events WHERE project_id = ? AND environment = ? AND distinct_id = ? GROUP BY distinct_id",
-				projID, environment, checkID,
-			).Scan(&foundDistinctID, &lastSeen)
-			if err2 == nil {
-				break
-			}
-		}
-
-		if foundDistinctID != "" {
-			// Found events for this user, create stub profile
-			p = PersonProfile{
-				DistinctID: distinctID, // Use the originally requested ID
-				Properties: map[string]string{},
-				LastSeen:   lastSeen,
-				Aliases:    []string{},
-			}
-
-			// Collect all known aliases for this user
-			aliasRows, err := h.CH.Query(context.Background(),
-				"SELECT alias_id, distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND (alias_id = ? OR distinct_id = ?)",
-				projID, environment, canonicalID, distinctID,
-			)
-			if err == nil {
-				defer aliasRows.Close()
-				for aliasRows.Next() {
-					var aid, did string
-					if aliasRows.Scan(&aid, &did) == nil {
-						if aid != distinctID {
-							p.Aliases = append(p.Aliases, aid)
+	rows, err := h.CH.Query(context.Background(), query, queryArgs...)
+	if err != nil {
+		log.Printf("GetPerson Error: %v", err)
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var did string
+			var props map[string]string
+			var ls time.Time
+			if err := rows.Scan(&did, &props, &ls); err == nil {
+				if p.DistinctID == "" {
+					p.DistinctID = did
+					p.Properties = props
+					p.LastSeen = ls
+				} else {
+					// Merge properties, newer values win?
+					// For now, just keep the first (latest) one's properties as primary,
+					// but we could merge them here.
+					for k, v := range props {
+						if _, ok := p.Properties[k]; !ok {
+							p.Properties[k] = v
 						}
-						if did != distinctID {
-							p.Aliases = append(p.Aliases, did)
-						}
+					}
+					if ls.After(p.LastSeen) {
+						p.LastSeen = ls
 					}
 				}
 			}
-
-			return c.JSON(fiber.Map{"data": p})
 		}
-
-		return c.Status(404).JSON(fiber.Map{"error": "Person not found"})
 	}
 
-	// 4. Resolve display_id: follow alias chain forward to find the latest identity
+// Fallback if not in persons table: check events table for activity
+	if p.DistinctID == "" {
+		placeholdersEvents := make([]string, len(allIDs))
+		queryArgsEvents := []interface{}{projID, environment}
+		for i, id := range allIDs {
+			placeholdersEvents[i] = "?"
+			queryArgsEvents = append(queryArgsEvents, id)
+		}
+
+		var foundDistinctID string
+		var lastSeen time.Time
+
+		err2 := h.CH.QueryRow(context.Background(),
+			fmt.Sprintf("SELECT distinct_id, max(timestamp) FROM events WHERE project_id = ? AND environment = ? AND distinct_id IN (%s) GROUP BY distinct_id ORDER BY max(timestamp) DESC LIMIT 1", strings.Join(placeholdersEvents, ",")),
+			queryArgsEvents...,
+		).Scan(&foundDistinctID, &lastSeen)
+
+		if err2 == nil && foundDistinctID != "" {
+			p.DistinctID = foundDistinctID
+			p.LastSeen = lastSeen
+			p.Properties = make(map[string]string)
+		} else {
+			return c.Status(404).JSON(fiber.Map{
+				"error":    "Person not found",
+				"id":       distinctID,
+				"resolved": allIDs,
+				"proj":     projID,
+				"env":      environment,
+			})
+		}
+	}
+
+	// 4. Resolve display_id: find the latest identity
 	p.DisplayID = h.resolveDisplayID(projID, environment, p.DistinctID)
 
-	// 5. Resolve ALL aliases for this person (recursive chain) to populate p.Aliases
-	// The initial query only gets aliases linked to the *canonical* ID, which might miss some hops.
-	allIDs := h.resolveAllAliasedIDs(projID, environment, canonicalID)
-
-	// Filter out the main distinct_id and display_id from the aliases list
+	// 5. Populate Aliases list from the allIDs we already found
 	seenAliases := make(map[string]bool)
 	var finalAliases []string
 
 	for _, id := range allIDs {
-		// Don't include the main ID or display ID in the aliases list
 		if id != p.DistinctID && id != p.DisplayID {
 			if !seenAliases[id] {
 				seenAliases[id] = true
@@ -851,6 +815,9 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 		}
 	}
 	p.Aliases = finalAliases
+	if p.Aliases == nil {
+		p.Aliases = []string{}
+	}
 
 	return c.JSON(fiber.Map{"data": p})
 }
@@ -859,43 +826,57 @@ func (h *PeopleHandler) GetPerson(c *fiber.Ctx) error {
 // by following the alias chain in both directions.
 // Mirrors the logic in EventsHandler.
 func (h *PeopleHandler) resolveAllAliasedIDs(projID, environment, startID string) []string {
+	startID = strings.TrimSpace(startID)
+	if startID == "" {
+		return []string{}
+	}
+
 	allIDs := map[string]bool{startID: true}
 	queue := []string{startID}
 
+	// BFS to find all connected IDs
 	for len(queue) > 0 {
 		currentID := queue[0]
 		queue = queue[1:]
 
-		// Forward: currentID is alias_id -> find distinct_id
+		// Forward: alias_id -> distinct_id
 		rows, err := h.CH.Query(context.Background(),
-			"SELECT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ?",
+			"SELECT DISTINCT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ?",
 			projID, environment, currentID,
 		)
 		if err == nil {
 			for rows.Next() {
 				var did string
-				if rows.Scan(&did) == nil && !allIDs[did] {
-					allIDs[did] = true
-					queue = append(queue, did)
+				if err := rows.Scan(&did); err == nil && did != "" {
+					if !allIDs[did] {
+						allIDs[did] = true
+						queue = append(queue, did)
+					}
 				}
 			}
 			rows.Close()
+		} else {
+			log.Printf("DEBUG: resolveAllAliasedIDs Forward Error: %v", err)
 		}
 
-		// Backward: currentID is distinct_id -> find alias_id
+		// Backward: distinct_id -> alias_id
 		rows2, err := h.CH.Query(context.Background(),
-			"SELECT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ?",
+			"SELECT DISTINCT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ?",
 			projID, environment, currentID,
 		)
 		if err == nil {
 			for rows2.Next() {
 				var aid string
-				if rows2.Scan(&aid) == nil && !allIDs[aid] {
-					allIDs[aid] = true
-					queue = append(queue, aid)
+				if err := rows2.Scan(&aid); err == nil && aid != "" {
+					if !allIDs[aid] {
+						allIDs[aid] = true
+						queue = append(queue, aid)
+					}
 				}
 			}
 			rows2.Close()
+		} else {
+			log.Printf("DEBUG: resolveAllAliasedIDs Backward Error: %v", err)
 		}
 	}
 
@@ -1106,7 +1087,11 @@ func (h *PeopleHandler) GetPropertyValues(c *fiber.Ctx) error {
 // GetPersonHeatmap - GET /api/v1/people/:id/heatmap
 // Returns daily event counts over the last 365 days for the user
 func (h *PeopleHandler) GetPersonHeatmap(c *fiber.Ctx) error {
-	distinctID := c.Params("id")
+	distinctID := strings.TrimSpace(c.Params("id"))
+	if decoded, err := url.PathUnescape(distinctID); err == nil {
+		distinctID = decoded
+	}
+
 	if distinctID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing distinct_id"})
 	}
@@ -1147,9 +1132,11 @@ func (h *PeopleHandler) GetPersonHeatmap(c *fiber.Ctx) error {
 		allIDs = []string{canonicalID}
 	}
 
-	whereClause := "WHERE project_id = ? AND environment = ? AND distinct_id IN (?)"
-	if hideSystem {
-		whereClause += " AND event_name NOT LIKE '$%'"
+	placeholders := make([]string, len(allIDs))
+	queryArgs := []interface{}{projID, environment}
+	for i, id := range allIDs {
+		placeholders[i] = "?"
+		queryArgs = append(queryArgs, id)
 	}
 
 	query := fmt.Sprintf(`
@@ -1159,14 +1146,19 @@ func (h *PeopleHandler) GetPersonHeatmap(c *fiber.Ctx) error {
 		FROM (
 			SELECT distinct_id, event_name, timestamp
 			FROM events 
-			%s
+			WHERE project_id = ? AND environment = ? AND distinct_id IN (%s) %s
 			LIMIT 1 BY distinct_id, event_name, timestamp
 		)
 		GROUP BY day
 		ORDER BY day ASC
-	`, whereClause)
+	`, strings.Join(placeholders, ","), func() string {
+		if hideSystem {
+			return "AND event_name NOT LIKE '$%'"
+		}
+		return ""
+	}())
 
-	rows, err := h.CH.Query(context.Background(), query, projID, environment, allIDs)
+	rows, err := h.CH.Query(context.Background(), query, queryArgs...)
 	if err != nil {
 		log.Println("ClickHouse GetPersonHeatmap Error:", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate heatmap"})

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,6 +65,11 @@ func (h *EventsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber
 // by following the alias chain in both directions.
 // Given any ID in the chain, it returns [anonymous_uuid, user_532, user_304, user_80]
 func (h *EventsHandler) resolveAllAliasedIDs(projID, environment, startID string) []string {
+	startID = strings.TrimSpace(startID)
+	if startID == "" {
+		return []string{}
+	}
+
 	allIDs := map[string]bool{startID: true}
 	queue := []string{startID}
 
@@ -73,15 +79,17 @@ func (h *EventsHandler) resolveAllAliasedIDs(projID, environment, startID string
 
 		// Forward: currentID is alias_id → find distinct_id
 		rows, err := h.CH.Query(context.Background(),
-			"SELECT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ?",
+			"SELECT DISTINCT distinct_id FROM person_aliases WHERE project_id = ? AND environment = ? AND alias_id = ?",
 			projID, environment, currentID,
 		)
 		if err == nil {
 			for rows.Next() {
 				var did string
-				if rows.Scan(&did) == nil && !allIDs[did] {
-					allIDs[did] = true
-					queue = append(queue, did)
+				if err := rows.Scan(&did); err == nil && did != "" {
+					if !allIDs[did] {
+						allIDs[did] = true
+						queue = append(queue, did)
+					}
 				}
 			}
 			rows.Close()
@@ -89,15 +97,17 @@ func (h *EventsHandler) resolveAllAliasedIDs(projID, environment, startID string
 
 		// Backward: currentID is distinct_id → find alias_id
 		rows2, err := h.CH.Query(context.Background(),
-			"SELECT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ?",
+			"SELECT DISTINCT alias_id FROM person_aliases WHERE project_id = ? AND environment = ? AND distinct_id = ?",
 			projID, environment, currentID,
 		)
 		if err == nil {
 			for rows2.Next() {
 				var aid string
-				if rows2.Scan(&aid) == nil && !allIDs[aid] {
-					allIDs[aid] = true
-					queue = append(queue, aid)
+				if err := rows2.Scan(&aid); err == nil && aid != "" {
+					if !allIDs[aid] {
+						allIDs[aid] = true
+						queue = append(queue, aid)
+					}
 				}
 			}
 			rows2.Close()
@@ -828,7 +838,11 @@ func (h *EventsHandler) GetEventDetail(c *fiber.Ctx) error {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	eventID := c.Params("id")
+	eventID := strings.TrimSpace(c.Params("id"))
+	if decoded, err := url.PathUnescape(eventID); err == nil {
+		eventID = decoded
+	}
+
 	if eventID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Missing event ID"})
 	}
