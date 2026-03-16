@@ -328,8 +328,8 @@ func (h *BoardsHandler) PinBoard(c *fiber.Ctx) error {
 	// Transaction to safely perform unpin/pin
 	tx := h.DB.Begin()
 
-	// 1. Unpin all current boards for this project
-	if err := tx.Model(&database.Board{}).Where("project_id = ?", project.ID).Update("is_pinned", false).Error; err != nil {
+	// 1. Unpin all current boards for this project in the same environment
+	if err := tx.Model(&database.Board{}).Where("project_id = ? AND environment = ?", project.ID, targetBoard.Environment).Update("is_pinned", false).Error; err != nil {
 		tx.Rollback()
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update board statuses"})
 	}
