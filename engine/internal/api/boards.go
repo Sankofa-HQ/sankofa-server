@@ -197,7 +197,7 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 	var userShareBoardIDs []string
 	h.DB.Model(&database.BoardShare{}).
 		Joins("JOIN boards ON boards.id = board_shares.board_id").
-		Where("board_shares.shared_with_type = 'user' AND board_shares.shared_with_id = ? AND boards.project_id = ?", userID, project.ID).
+		Where("board_shares.shared_with_type = 'user' AND board_shares.shared_with_id = ? AND boards.project_id = ? AND boards.environment = ?", userID, project.ID, environment).
 		Pluck("board_shares.board_id", &userShareBoardIDs)
 	for _, id := range userShareBoardIDs {
 		sharedIDSet[id] = "user"
@@ -210,7 +210,7 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 		var teamShareBoardIDs []string
 		h.DB.Model(&database.BoardShare{}).
 			Joins("JOIN boards ON boards.id = board_shares.board_id").
-			Where("board_shares.shared_with_type = 'team' AND board_shares.shared_with_id IN ? AND boards.project_id = ?", teamIDs, project.ID).
+			Where("board_shares.shared_with_type = 'team' AND board_shares.shared_with_id IN ? AND boards.project_id = ? AND boards.environment = ?", teamIDs, project.ID, environment).
 			Pluck("board_shares.board_id", &teamShareBoardIDs)
 		for _, id := range teamShareBoardIDs {
 			if _, exists := sharedIDSet[id]; !exists {
@@ -223,7 +223,7 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 	var projectShareBoardIDs []string
 	h.DB.Model(&database.BoardShare{}).
 		Joins("JOIN boards ON boards.id = board_shares.board_id").
-		Where("board_shares.shared_with_type = 'project' AND board_shares.shared_with_id = ? AND boards.project_id = ?", project.ID, project.ID).
+		Where("board_shares.shared_with_type = 'project' AND board_shares.shared_with_id = ? AND boards.project_id = ? AND boards.environment = ?", project.ID, project.ID, environment).
 		Pluck("board_shares.board_id", &projectShareBoardIDs)
 	for _, id := range projectShareBoardIDs {
 		if _, exists := sharedIDSet[id]; !exists {
@@ -795,11 +795,13 @@ func (h *BoardsHandler) ListSharedBoards(c *fiber.Ctx) error {
 		return err
 	}
 
+	environment := c.Query("environment", "live")
+
 	// 1. Direct user shares
 	var userShareBoardIDs []string
 	h.DB.Model(&database.BoardShare{}).
 		Joins("JOIN boards ON boards.id = board_shares.board_id").
-		Where("board_shares.shared_with_type = 'user' AND board_shares.shared_with_id = ? AND boards.project_id = ?", userID, project.ID).
+		Where("board_shares.shared_with_type = 'user' AND board_shares.shared_with_id = ? AND boards.project_id = ? AND boards.environment = ?", userID, project.ID, environment).
 		Pluck("board_shares.board_id", &userShareBoardIDs)
 
 	// 2. Team shares — get user's teams first
@@ -810,7 +812,7 @@ func (h *BoardsHandler) ListSharedBoards(c *fiber.Ctx) error {
 	if len(teamIDs) > 0 {
 		h.DB.Model(&database.BoardShare{}).
 			Joins("JOIN boards ON boards.id = board_shares.board_id").
-			Where("board_shares.shared_with_type = 'team' AND board_shares.shared_with_id IN ? AND boards.project_id = ?", teamIDs, project.ID).
+			Where("board_shares.shared_with_type = 'team' AND board_shares.shared_with_id IN ? AND boards.project_id = ? AND boards.environment = ?", teamIDs, project.ID, environment).
 			Pluck("board_shares.board_id", &teamShareBoardIDs)
 	}
 
@@ -818,7 +820,7 @@ func (h *BoardsHandler) ListSharedBoards(c *fiber.Ctx) error {
 	var projectShareBoardIDs []string
 	h.DB.Model(&database.BoardShare{}).
 		Joins("JOIN boards ON boards.id = board_shares.board_id").
-		Where("board_shares.shared_with_type = 'project' AND board_shares.shared_with_id = ? AND boards.project_id = ?", project.ID, project.ID).
+		Where("board_shares.shared_with_type = 'project' AND board_shares.shared_with_id = ? AND boards.project_id = ? AND boards.environment = ?", project.ID, project.ID, environment).
 		Pluck("board_shares.board_id", &projectShareBoardIDs)
 
 	// Combine and deduplicate
