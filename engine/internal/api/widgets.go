@@ -598,6 +598,8 @@ func (h *WidgetsHandler) GetTopUsers(c *fiber.Ctx) error {
 	type TopUser struct {
 		DistinctID  string `json:"distinct_id"`
 		TotalEvents uint64 `json:"total_events"`
+		Avatar      string `json:"avatar"`
+		Name        string `json:"name"`
 	}
 
 	var users []TopUser
@@ -612,6 +614,46 @@ func (h *WidgetsHandler) GetTopUsers(c *fiber.Ctx) error {
 			DistinctID:  id,
 			TotalEvents: count,
 		})
+	}
+
+	// 2. Fetch avatars and names for these top users
+	if len(users) > 0 {
+		userIDs := make([]string, len(users))
+		for i, u := range users {
+			userIDs[i] = u.DistinctID
+		}
+
+		queryProps := `
+			SELECT 
+				distinct_id, 
+				argMax(properties['$avatar'], last_seen) as avatar,
+				argMax(properties['$name'], last_seen) as name
+			FROM persons 
+			WHERE project_id = ? AND environment = ? AND distinct_id IN (?)
+			GROUP BY distinct_id
+		`
+		propRows, err := h.CH.Query(ctx, queryProps, project.ID, environment, userIDs)
+		if err == nil {
+			defer propRows.Close()
+			avatarMap := make(map[string]string)
+			nameMap := make(map[string]string)
+			for propRows.Next() {
+				var id, avatar, name string
+				if err := propRows.Scan(&id, &avatar, &name); err == nil {
+					avatarMap[id] = avatar
+					nameMap[id] = name
+				}
+			}
+
+			for i := range users {
+				if avatar, ok := avatarMap[users[i].DistinctID]; ok {
+					users[i].Avatar = avatar
+				}
+				if name, ok := nameMap[users[i].DistinctID]; ok {
+					users[i].Name = name
+				}
+			}
+		}
 	}
 
 	return c.JSON(fiber.Map{"users": users})
