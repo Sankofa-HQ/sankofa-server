@@ -270,6 +270,7 @@ func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
 		Description string          `json:"description"`
 		Type        string          `json:"type"`
 		ProjectID   string          `json:"project_id"`
+		Environment string          `json:"environment"`
 		Rules       json.RawMessage `json:"rules"`   // Dynamic
 		Members     []string        `json:"members"` // Static initial members?
 	}
@@ -284,6 +285,7 @@ func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
 		Name:        req.Name,
 		Description: req.Description,
 		Type:        req.Type,
+		Environment: req.Environment,
 		Rules:       req.Rules,
 		CreatedByID: userID,
 		CreatedAt:   time.Now(),
@@ -329,6 +331,7 @@ func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
 		"name":          cohort.Name,
 		"description":   cohort.Description,
 		"type":          cohort.Type,
+		"environment":   cohort.Environment,
 		"rules":         string(cohort.Rules),
 		"created_at":    cohort.CreatedAt.Format("Jan 02, 2006"),
 		"updated_at":    cohort.UpdatedAt.Format("Jan 02, 2006"),
@@ -346,7 +349,14 @@ func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
 	}
 
 	var cohorts []database.Cohort
-	if err := h.DB.Preload("CreatedBy").Where("project_id = ?", projectID).Order("created_at DESC").Find(&cohorts).Error; err != nil {
+	query := h.DB.Preload("CreatedBy").Where("project_id = ?", projectID)
+
+	env := c.Query("environment")
+	if env != "" {
+		query = query.Where("environment = ?", env)
+	}
+
+	if err := query.Order("created_at DESC").Find(&cohorts).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch cohorts"})
 	}
 
@@ -356,6 +366,7 @@ func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Type        string `json:"type"`
+		Environment string `json:"environment"`
 		Rules       string `json:"rules"`
 		CreatedAt   string `json:"created_at"`
 		UpdatedAt   string `json:"updated_at"`
@@ -377,6 +388,7 @@ func (h *CohortsHandler) ListCohorts(c *fiber.Ctx) error {
 			Name:        c.Name,
 			Description: c.Description,
 			Type:        c.Type,
+			Environment: c.Environment,
 			Rules:       string(c.Rules),
 			CreatedAt:   c.CreatedAt.Format("Jan 02, 2006"),
 			UpdatedAt:   c.UpdatedAt.Format("Jan 02, 2006"),
@@ -455,6 +467,7 @@ func (h *CohortsHandler) UpdateCohort(c *fiber.Ctx) error {
 		"name":          cohort.Name,
 		"description":   cohort.Description,
 		"type":          cohort.Type,
+		"environment":   cohort.Environment,
 		"rules":         string(cohort.Rules),
 		"created_at":    cohort.CreatedAt.Format("Jan 02, 2006"),
 		"updated_at":    cohort.UpdatedAt.Format("Jan 02, 2006"),

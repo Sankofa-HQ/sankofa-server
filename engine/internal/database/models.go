@@ -186,6 +186,7 @@ type Cohort struct {
 	Name        string    `gorm:"not null" json:"name"`
 	Description string    `json:"description"`
 	Type        string    `json:"type"` // "dynamic" or "static"
+	Environment string    `gorm:"default:'live';index" json:"environment"`
 	Rules       []byte    `gorm:"type:text" json:"rules"`
 	IsVisible   bool      `gorm:"default:true" json:"is_visible"`
 	CreatedAt   time.Time `json:"created_at"`
