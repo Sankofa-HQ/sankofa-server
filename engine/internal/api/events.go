@@ -213,9 +213,46 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		Where("project_id = ? AND environment = ? AND (status IN ? OR hidden = ?)", project.ID, environment, []string{"rejected", "hidden"}, true).
 		Pluck("name", &hiddenEventNames)
 
+	// Determine requested events from eventQueries or legacy query params
+	var requestedEventNames []string
+	queriesJSON := c.Query("queries", "")
+	if queriesJSON != "" {
+		var parseQueries []struct {
+			EventName string `json:"eventName"`
+		}
+		if err := json.Unmarshal([]byte(queriesJSON), &parseQueries); err == nil {
+			for _, q := range parseQueries {
+				if q.EventName != "" {
+					requestedEventNames = append(requestedEventNames, q.EventName)
+				}
+			}
+		}
+	} else if eventName := c.Query("event_name", ""); eventName != "" {
+		requestedEventNames = append(requestedEventNames, eventName)
+	}
+
 	if len(hiddenEventNames) > 0 {
-		whereClause += " AND event_name NOT IN ?"
-		queryArgs = append(queryArgs, hiddenEventNames)
+		// If explicit events are requested (especially virtual ones), their children might be hidden.
+		// We shouldn't globally exclude hidden events that we are explicitly asking for (either directly or via parent expansion).
+		if len(requestedEventNames) > 0 {
+			expandedRequested := ExpandVirtualEventNames(h.DB, projID, environment, requestedEventNames)
+			var filteredHidden []string
+			expandedMap := make(map[string]bool)
+			for _, n := range expandedRequested {
+				expandedMap[n] = true
+			}
+			for _, hName := range hiddenEventNames {
+				if !expandedMap[hName] {
+					filteredHidden = append(filteredHidden, hName)
+				}
+			}
+			hiddenEventNames = filteredHidden
+		}
+
+		if len(hiddenEventNames) > 0 {
+			whereClause += " AND event_name NOT IN ?"
+			queryArgs = append(queryArgs, hiddenEventNames)
+		}
 	}
 
 	if sessionID != "" {
@@ -248,7 +285,7 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 	}
 
 	// 2. Parse Event Queries (or Fallback)
-	queriesJSON := c.Query("queries", "")
+	queriesJSON = c.Query("queries", "")
 	var eventQueries []struct {
 		EventName   string `json:"eventName"`
 		IsFirstTime bool   `json:"isFirstTime"`
