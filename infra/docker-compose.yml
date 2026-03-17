@@ -1,23 +1,4 @@
 services:
-  sankofa:
-    image: sankofa/engine:latest
-    build:
-      context: ../../
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-      - "3000:3000"
-    environment:
-      CLICKHOUSE_ADDR: clickhouse:9000
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: password123
-      CLICKHOUSE_DB: default
-    volumes:
-      - ./sankofa_data:/app/data
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
     ports:
