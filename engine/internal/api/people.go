@@ -322,116 +322,91 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 				WHERE project_id = ? AND environment = ?
 			) pa ON p.distinct_id = pa.alias_id
 		)
-		WHERE 1=1
 	`
 	args := []interface{}{projID, environment, projID, environment}
 
+	whereClauses := []string{"1=1"}
+	havingClauses := []string{}
+
 	if search != "" {
 		// Search both distinct_id and aliases (resolve alias -> distinct_id)
-		baseQuery += ` AND (
+		whereClauses = append(whereClauses, `(
 			positionCaseInsensitive(distinct_id, ?) > 0 
 			OR distinct_id IN (
 				SELECT alias_id FROM person_aliases 
 				WHERE positionCaseInsensitive(distinct_id, ?) > 0
 			)
-		)`
+		)`)
 		args = append(args, search, search)
 	}
-
-	// DEBUG: log initial query
-	log.Printf("DEBUG: Initial BaseQuery: %s | Args: %v", baseQuery, args)
 
 	// Parse and apply filters
 	filtersJSON := c.Query("filters", "")
 	if filtersJSON != "" {
-		log.Printf("DEBUG ListPeople: Raw filtersJSON: %s", filtersJSON)
 		var filters []Filter
 		if err := json.Unmarshal([]byte(filtersJSON), &filters); err == nil {
-			log.Printf("DEBUG ListPeople: Parsed filters: %+v", filters)
 			for _, f := range filters {
-
 				// --- User Property Filters ---
 				if f.FilterType == "user_property" {
 					if f.Property == "" {
 						continue
 					}
-
 					valStr := fmt.Sprintf("%v", f.Value)
-
 					switch f.Operator {
 					case "is":
-						baseQuery += fmt.Sprintf(" AND properties['%s'] = ?", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("properties['%s'] = ?", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "is_not":
-						baseQuery += fmt.Sprintf(" AND properties['%s'] != ?", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("properties['%s'] != ?", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "contains":
-						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(properties['%s'], ?) > 0", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("positionCaseInsensitive(properties['%s'], ?) > 0", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "does_not_contain":
-						baseQuery += fmt.Sprintf(" AND positionCaseInsensitive(properties['%s'], ?) = 0", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("positionCaseInsensitive(properties['%s'], ?) = 0", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "is_set":
-						baseQuery += fmt.Sprintf(" AND mapContains(properties, '%s')", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("mapContains(properties, '%s')", sanitizeKey(f.Property)))
 					case "is_not_set":
-						baseQuery += fmt.Sprintf(" AND NOT mapContains(properties, '%s')", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("NOT mapContains(properties, '%s')", sanitizeKey(f.Property)))
 					case "gt":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("toFloat64OrZero(properties['%s']) > toFloat64OrZero(?)", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "lt":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("toFloat64OrZero(properties['%s']) < toFloat64OrZero(?)", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "gte":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("toFloat64OrZero(properties['%s']) >= toFloat64OrZero(?)", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "lte":
-						baseQuery += fmt.Sprintf(" AND toFloat64OrZero(properties['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("toFloat64OrZero(properties['%s']) <= toFloat64OrZero(?)", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "eq":
-						baseQuery += fmt.Sprintf(" AND properties['%s'] = ?", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("properties['%s'] = ?", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "neq":
-						baseQuery += fmt.Sprintf(" AND properties['%s'] != ?", sanitizeKey(f.Property))
+						havingClauses = append(havingClauses, fmt.Sprintf("properties['%s'] != ?", sanitizeKey(f.Property)))
 						args = append(args, valStr)
 					case "in_last":
-						// Handle Date "in_last" logic: e.g. "7d"
-						// Assuming value is string like "7d", "24h"
-						// Check if property is a date string in ISO format?
-						// For simplicity, we might interpret Last Seen logic or just timestamp comparison
-						// But properties are strings. We need parseDateTimeBestEffort
 						durStr := valStr
 						var seconds int64
 						if len(durStr) > 0 {
 							val, _ := strconv.Atoi(durStr[:len(durStr)-1])
 							unit := durStr[len(durStr)-1]
-							if unit == 'h' {
-								seconds = int64(val) * 3600
-							}
-							if unit == 'd' {
-								seconds = int64(val) * 86400
-							}
-							if unit == 'm' {
-								seconds = int64(val) * 60
-							} // minutes or months? Assuming minutes for simple parse, but UI usually sends 'd' or 'h'
+							if unit == 'h' { seconds = int64(val) * 3600 }
+							if unit == 'd' { seconds = int64(val) * 86400 }
+							if unit == 'm' { seconds = int64(val) * 60 }
 						}
 						if seconds > 0 {
-							baseQuery += fmt.Sprintf(" AND parseDateTimeBestEffortOrNull(properties['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property))
+							havingClauses = append(havingClauses, fmt.Sprintf("parseDateTimeBestEffortOrNull(properties['%s']) >= now() - INTERVAL ? SECOND", sanitizeKey(f.Property)))
 							args = append(args, seconds)
 						}
 					}
 				} else if f.FilterType == "event" {
-					// --- Event Filters ---
-					// Users who DID / DID NOT do [Event] [Metric Operator Value] in [TimeRange]
-
-					// 1. Calculate time range sql
 					timeSql, timeArgs := ParseTimeRangeSql("timestamp", f.TimeRange)
 					if timeSql == "" && f.TimeRange != "all" {
-						timeSql, timeArgs = ParseTimeRangeSql("timestamp", "30d") // Default
+						timeSql, timeArgs = ParseTimeRangeSql("timestamp", "30d")
 					}
-
-					// 2. Build Subquery for Events
-					// SELECT distinct_id FROM events WHERE ... GROUP BY distinct_id HAVING ...
-
 					expandedNames := ExpandVirtualEventNames(h.DB, projID, environment, []string{f.EventName})
 					placeholders := make([]string, len(expandedNames))
 					subArgs := []interface{}{projID, environment}
@@ -439,15 +414,11 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 						placeholders[i] = "?"
 						subArgs = append(subArgs, name)
 					}
-
 					subQuery := fmt.Sprintf(`SELECT distinct_id FROM events WHERE project_id = ? AND environment = ? AND event_name IN (%s)`, strings.Join(placeholders, ","))
-
 					if timeSql != "" {
 						subQuery += " AND " + timeSql
 						subArgs = append(subArgs, timeArgs...)
 					}
-
-					// 2b. Apply where clause filters on event properties
 					if len(f.WhereFilters) > 0 {
 						wcSQL, wcArgs := buildWhereClauseSQL(h.DB, f.WhereFilters, projID, environment)
 						if wcSQL != "" {
@@ -455,135 +426,75 @@ func (h *PeopleHandler) ListPeople(c *fiber.Ctx) error {
 							subArgs = append(subArgs, wcArgs...)
 						}
 					}
-					// 3. Aggregation / Having Clause
 					havingClause := ""
 					metricOp := ""
-
-					// Map operator string to SQL
 					switch f.Operator {
-					case "gt":
-						metricOp = ">"
-					case "lt":
-						metricOp = "<"
-					case "gte":
-						metricOp = ">="
-					case "lte":
-						metricOp = "<="
-					case "eq":
-						metricOp = "="
-					case "neq":
-						metricOp = "!="
-					default:
-						metricOp = ">="
+					case "gt": metricOp = ">"
+					case "lt": metricOp = "<"
+					case "gte": metricOp = ">="
+					case "lte": metricOp = "<="
+					case "eq": metricOp = "="
+					case "neq": metricOp = "!="
+					default: metricOp = ">="
 					}
-
 					valFloat := 0.0
-					if v, ok := f.Value.(float64); ok {
-						valFloat = v
-					} else if v, ok := f.Value.(string); ok {
-						valFloat, _ = strconv.ParseFloat(v, 64)
-					}
-
-					// Determine Metric Expression
-					// We use mapUpdate to check both default_properties and properties. Custom properties override defaults.
+					if v, ok := f.Value.(float64); ok { valFloat = v } else if v, ok := f.Value.(string); ok { valFloat, _ = strconv.ParseFloat(v, 64) }
 					propExpr := fmt.Sprintf("toFloat64OrZero(mapUpdate(default_properties, properties)['%s'])", sanitizeKey(f.Property))
-
 					switch f.Metric {
-					case "total_events":
-						havingClause = fmt.Sprintf("count() %s ?", metricOp)
-						subArgs = append(subArgs, valFloat)
-					case "aggregate_sum":
-						if f.Property != "" {
-							havingClause = fmt.Sprintf("sum(%s) %s ?", propExpr, metricOp)
-							subArgs = append(subArgs, valFloat)
-						}
-					case "aggregate_avg":
-						if f.Property != "" {
-							havingClause = fmt.Sprintf("avg(%s) %s ?", propExpr, metricOp)
-							subArgs = append(subArgs, valFloat)
-						}
-					case "aggregate_min":
-						if f.Property != "" {
-							havingClause = fmt.Sprintf("min(%s) %s ?", propExpr, metricOp)
-							subArgs = append(subArgs, valFloat)
-						}
-					case "aggregate_max":
-						if f.Property != "" {
-							havingClause = fmt.Sprintf("max(%s) %s ?", propExpr, metricOp)
-							subArgs = append(subArgs, valFloat)
-						}
-					case "aggregate_distinct_count":
-						if f.Property != "" {
-							havingClause = fmt.Sprintf("uniqExact(mapUpdate(default_properties, properties)['%s']) %s ?", sanitizeKey(f.Property), metricOp)
-							subArgs = append(subArgs, valFloat)
-						}
-					default:
-						// Default to total key count if metric unknown? or just count()
-						havingClause = fmt.Sprintf("count() %s ?", metricOp)
-						subArgs = append(subArgs, valFloat)
+					case "total_events": havingClause = fmt.Sprintf("count() %s ?", metricOp); subArgs = append(subArgs, valFloat)
+					case "aggregate_sum": if f.Property != "" { havingClause = fmt.Sprintf("sum(%s) %s ?", propExpr, metricOp); subArgs = append(subArgs, valFloat) }
+					case "aggregate_avg": if f.Property != "" { havingClause = fmt.Sprintf("avg(%s) %s ?", propExpr, metricOp); subArgs = append(subArgs, valFloat) }
+					case "aggregate_min": if f.Property != "" { havingClause = fmt.Sprintf("min(%s) %s ?", propExpr, metricOp); subArgs = append(subArgs, valFloat) }
+					case "aggregate_max": if f.Property != "" { havingClause = fmt.Sprintf("max(%s) %s ?", propExpr, metricOp); subArgs = append(subArgs, valFloat) }
+					case "aggregate_distinct_count": if f.Property != "" { havingClause = fmt.Sprintf("uniqExact(mapUpdate(default_properties, properties)['%s']) %s ?", sanitizeKey(f.Property), metricOp); subArgs = append(subArgs, valFloat) }
+					default: havingClause = fmt.Sprintf("count() %s ?", metricOp); subArgs = append(subArgs, valFloat)
 					}
-
-					if havingClause != "" {
-						subQuery += " GROUP BY distinct_id HAVING " + havingClause
-					} else {
-						// If no metric specified (rare), just existence
-						subQuery += " GROUP BY distinct_id"
-					}
-
-					// 4. Apply to Main Query
+					if havingClause != "" { subQuery += " GROUP BY distinct_id HAVING " + havingClause } else { subQuery += " GROUP BY distinct_id" }
 					if f.BehaviorType == "did" {
-						baseQuery += fmt.Sprintf(" AND distinct_id IN (%s)", subQuery)
+						whereClauses = append(whereClauses, fmt.Sprintf("distinct_id IN (%s)", subQuery))
 						args = append(args, subArgs...)
-					} else { // did_not
-						baseQuery += fmt.Sprintf(" AND distinct_id NOT IN (%s)", subQuery)
+					} else {
+						whereClauses = append(whereClauses, fmt.Sprintf("distinct_id NOT IN (%s)", subQuery))
 						args = append(args, subArgs...)
 					}
 				} else if f.FilterType == "cohort" {
-					// --- Cohort Filters ---
 					cohortIDStr := fmt.Sprintf("%v", f.Value)
-					if f.CohortID != nil {
-						cohortIDStr = fmt.Sprintf("%v", f.CohortID)
-					}
+					if f.CohortID != nil { cohortIDStr = fmt.Sprintf("%v", f.CohortID) }
 					var cohort database.Cohort
-					if err := h.DB.First(&cohort, "id = ?", cohortIDStr).Error; err != nil {
-						log.Println("Cohort not found:", cohortIDStr)
-						continue
-					}
-
-					var cohortSQL string
-					var cohortArgs []interface{}
-
-					if cohort.Type == "static" {
-						// Static Cohort: Use ClickHouse table with CollapsingMergeTree logic
-						cohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
-						cohortArgs = []interface{}{projID, cohort.ID}
-					} else {
-						// Dynamic Cohort: Parse AST and Build SQL
-						var ast CohortAST
-						if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
-							cohortSQL, cohortArgs = BuildCohortSQL(h.DB, projID, environment, ast)
+					if h.DB.First(&cohort, "id = ?", cohortIDStr).Error == nil {
+						var cohortSQL string
+						var cohortArgs []interface{}
+						if cohort.Type == "static" {
+							cohortSQL = "SELECT distinct_id FROM cohort_static_members WHERE project_id = ? AND cohort_id = ? GROUP BY distinct_id HAVING sum(sign) > 0"
+							cohortArgs = []interface{}{projID, cohort.ID}
 						} else {
-							log.Println("Failed to parse cohort rules:", err)
+							var ast CohortAST
+							if err := json.Unmarshal(cohort.Rules, &ast); err == nil {
+								cohortSQL, cohortArgs = BuildCohortSQL(h.DB, projID, environment, ast)
+							}
 						}
-					}
-
-					if cohortSQL != "" {
-						if f.BehaviorType == "did_not" { // exclude cohort (rare but possible)
-							baseQuery += fmt.Sprintf(" AND distinct_id NOT IN (%s)", cohortSQL)
-						} else {
-							baseQuery += fmt.Sprintf(" AND distinct_id IN (%s)", cohortSQL)
+						if cohortSQL != "" {
+							if f.BehaviorType == "did_not" {
+								whereClauses = append(whereClauses, fmt.Sprintf("distinct_id NOT IN (%s)", cohortSQL))
+							} else {
+								whereClauses = append(whereClauses, fmt.Sprintf("distinct_id IN (%s)", cohortSQL))
+							}
+							args = append(args, cohortArgs...)
 						}
-						args = append(args, cohortArgs...)
 					}
 				}
 			}
-		} else {
-			log.Printf("Failed to parse filters: %v. Raw json: %s", err, filtersJSON)
 		}
 	}
 
+	baseQuery += " WHERE " + strings.Join(whereClauses, " AND ")
+	baseQuery += " GROUP BY distinct_id"
+
+	if len(havingClauses) > 0 {
+		baseQuery += " HAVING " + strings.Join(havingClauses, " AND ")
+	}
+
 	baseQuery += `
-		GROUP BY distinct_id
 		ORDER BY last_seen DESC
 		LIMIT ? OFFSET ?
 	`
