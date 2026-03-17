@@ -234,37 +234,16 @@ func main() {
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	}))
 
-	// The root path "/" behavior depends on whether we are serving the dashboard (OSS/Docker)
-	// or redirecting to a landing page (Enterprise).
-	if os.Getenv("SERVE_DASHBOARD") == "true" {
-		// Serving Static Dashboard (produced by next export)
-		app.Static("/", "./dashboard", fiber.Static{
-			Compress:  true,
-			ByteRange: true,
-			Browse:    false,
-			Index:     "index.html",
-		})
-
-		// Fallback for SPA routing: any non-file request to root should serve index.html
-		app.Get("*", func(c *fiber.Ctx) error {
-			// Check if the request is for an API route - if we reached here, it's a 404 for API
-			if len(c.Path()) >= 4 && c.Path()[:4] == "/api" {
-				return c.Status(404).JSON(fiber.Map{"error": "Not Found"})
-			}
-			return c.SendFile("./dashboard/index.html")
-		})
-	} else {
-		// Redirect root API visits to the configured landing/docs page, or fallback to frontend
-		app.Get("/", func(c *fiber.Ctx) error {
-			if ROOT_REDIRECT_URL != "" {
-				return c.Redirect(ROOT_REDIRECT_URL, fiber.StatusMovedPermanently)
-			}
-			if FRONTEND_URL != "" {
-				return c.Redirect(FRONTEND_URL, fiber.StatusMovedPermanently)
-			}
-			return c.Status(200).JSON(fiber.Map{"name": "Sankofa API", "status": "running"})
-		})
-	}
+	// Redirect root API visits to the configured landing/docs page, or fallback to frontend
+	app.Get("/", func(c *fiber.Ctx) error {
+		if ROOT_REDIRECT_URL != "" {
+			return c.Redirect(ROOT_REDIRECT_URL, fiber.StatusMovedPermanently)
+		}
+		if FRONTEND_URL != "" {
+			return c.Redirect(FRONTEND_URL, fiber.StatusMovedPermanently)
+		}
+		return c.Status(200).JSON(fiber.Map{"name": "Sankofa API", "status": "running"})
+	})
 
 	// Health check endpoint
 	app.Get("/health", func(c *fiber.Ctx) error {

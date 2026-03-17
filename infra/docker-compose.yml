@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+      - "3000:3000"
     environment:
       CLICKHOUSE_ADDR: clickhouse:9000
       CLICKHOUSE_USER: default
@@ -16,8 +17,6 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-    profiles:
-      - full # Only starts when you run: docker compose --profile full up
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
