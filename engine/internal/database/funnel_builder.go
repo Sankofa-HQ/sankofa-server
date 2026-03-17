@@ -31,6 +31,9 @@ func BuildBreakdownSQL(expandedKeys []string) string {
 // BuildPropertyExtractionSQL standardizes how properties are queried, handling frontend prefixes.
 func BuildPropertyExtractionSQL(key string) string {
 	cleanKey := key
+	if cleanKey == "event_name" || cleanKey == "distinct_id" || cleanKey == "timestamp" || cleanKey == "lib_version" || cleanKey == "environment" || cleanKey == "session_id" || cleanKey == "os" || cleanKey == "device_model" || cleanKey == "user_avatar"{
+		return cleanKey
+	}
 	if strings.HasPrefix(key, "default_") {
 		cleanKey = key[8:]
 		return fmt.Sprintf("default_properties['%s']", escapeString(cleanKey))
@@ -261,6 +264,15 @@ func buildFilterConds(filters []models.Filter) (string, []any) {
 					}
 					orParts = append(orParts, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
 				}
+			case "not_in":
+				if len(f.Values) > 0 {
+					placeholders := make([]string, len(f.Values))
+					for i, v := range f.Values {
+						placeholders[i] = "?"
+						args = append(args, v)
+					}
+					orParts = append(orParts, fmt.Sprintf("%s NOT IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+				}
 			case "contains":
 				if len(f.Values) > 0 {
 					orParts = append(orParts, fmt.Sprintf("position(%s, ?) > 0", extractedVal))
@@ -315,6 +327,16 @@ func buildFilterCondsNamed(filters []models.Filter, prefix string) (string, []an
 						args = append(args, clickhouse.Named(pName, v))
 					}
 					orParts = append(orParts, fmt.Sprintf("%s IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
+				}
+			case "not_in":
+				if len(f.Values) > 0 {
+					placeholders := make([]string, len(f.Values))
+					for j, v := range f.Values {
+						pName := fmt.Sprintf("%s_v%d", paramName, j)
+						placeholders[j] = "@" + pName
+						args = append(args, clickhouse.Named(pName, v))
+					}
+					orParts = append(orParts, fmt.Sprintf("%s NOT IN (%s)", extractedVal, strings.Join(placeholders, ", ")))
 				}
 			case "contains":
 				if len(f.Values) > 0 {

@@ -70,18 +70,42 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 
 	// ── Pre-process: Expand virtual/merged property names in global filters ──
 	for i, f := range req.GlobalFilters {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-			req.GlobalFilters[i].ExpandedProperties = expanded
+		if f.Property == "event_name" {
+			expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
+			req.GlobalFilters[i].Values = expanded
+			if len(expanded) > 1 {
+				if f.Operator == "eq" || f.Operator == "is" {
+					req.GlobalFilters[i].Operator = "in"
+				} else if f.Operator == "neq" || f.Operator == "is_not" {
+					req.GlobalFilters[i].Operator = "not_in"
+				}
+			}
+		} else {
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+				req.GlobalFilters[i].ExpandedProperties = expanded
+			}
 		}
 	}
 
 	// ── Pre-process: Expand virtual/merged property names in per-metric filters ──
 	for mi, metric := range req.Metrics {
 		for fi, f := range metric.Filters {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.Metrics[mi].Filters[fi].ExpandedProperties = expanded
+			if f.Property == "event_name" {
+				expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
+				req.Metrics[mi].Filters[fi].Values = expanded
+				if len(expanded) > 1 {
+					if f.Operator == "eq" || f.Operator == "is" {
+						req.Metrics[mi].Filters[fi].Operator = "in"
+					} else if f.Operator == "neq" || f.Operator == "is_not" {
+						req.Metrics[mi].Filters[fi].Operator = "not_in"
+					}
+				}
+			} else {
+				expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+				if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+					req.Metrics[mi].Filters[fi].ExpandedProperties = expanded
+				}
 			}
 		}
 	}

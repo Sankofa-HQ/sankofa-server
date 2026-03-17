@@ -68,22 +68,46 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	}
 
 	// Expand virtual/merged property names in global filters
-	fmt.Printf("=== Funnel GlobalFilters (%d) ===\n", len(req.GlobalFilters))
+	fmt.Printf("=== Funnel GlobalFilters (%%d) ===\n", len(req.GlobalFilters))
 	for i, f := range req.GlobalFilters {
-		fmt.Printf("  Filter[%d]: property=%q operator=%q values=%v\n", i, f.Property, f.Operator, f.Values)
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-		fmt.Printf("  Filter[%d]: expanded=%v\n", i, expanded)
-		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-			req.GlobalFilters[i].ExpandedProperties = expanded
+		fmt.Printf("  Filter[%%d]: property=%%q operator=%%q values=%%v\n", i, f.Property, f.Operator, f.Values)
+		if f.Property == "event_name" {
+			expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
+			req.GlobalFilters[i].Values = expanded
+			if len(expanded) > 1 {
+				if f.Operator == "eq" || f.Operator == "is" {
+					req.GlobalFilters[i].Operator = "in"
+				} else if f.Operator == "neq" || f.Operator == "is_not" {
+					req.GlobalFilters[i].Operator = "not_in"
+				}
+			}
+		} else {
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+			fmt.Printf("  Filter[%%d]: expanded=%%v\n", i, expanded)
+			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+				req.GlobalFilters[i].ExpandedProperties = expanded
+			}
 		}
 	}
 
 	// Expand virtual/merged property names in per-step filters
 	for si, step := range req.Steps {
 		for fi, f := range step.Filters {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.Steps[si].Filters[fi].ExpandedProperties = expanded
+			if f.Property == "event_name" {
+				expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
+				req.Steps[si].Filters[fi].Values = expanded
+				if len(expanded) > 1 {
+					if f.Operator == "eq" || f.Operator == "is" {
+						req.Steps[si].Filters[fi].Operator = "in"
+					} else if f.Operator == "neq" || f.Operator == "is_not" {
+						req.Steps[si].Filters[fi].Operator = "not_in"
+					}
+				}
+			} else {
+				expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+				if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+					req.Steps[si].Filters[fi].ExpandedProperties = expanded
+				}
 			}
 		}
 	}
@@ -220,18 +244,42 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 
 	// Expand virtual/merged property names in global filters
 	for i, f := range req.GlobalFilters {
-		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-			req.GlobalFilters[i].ExpandedProperties = expanded
+		if f.Property == "event_name" {
+			expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
+			req.GlobalFilters[i].Values = expanded
+			if len(expanded) > 1 {
+				if f.Operator == "eq" || f.Operator == "is" {
+					req.GlobalFilters[i].Operator = "in"
+				} else if f.Operator == "neq" || f.Operator == "is_not" {
+					req.GlobalFilters[i].Operator = "not_in"
+				}
+			}
+		} else {
+			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+				req.GlobalFilters[i].ExpandedProperties = expanded
+			}
 		}
 	}
 
 	// Expand virtual/merged property names in per-step filters
 	for si, step := range req.Steps {
 		for fi, f := range step.Filters {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.Steps[si].Filters[fi].ExpandedProperties = expanded
+			if f.Property == "event_name" {
+				expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
+				req.Steps[si].Filters[fi].Values = expanded
+				if len(expanded) > 1 {
+					if f.Operator == "eq" || f.Operator == "is" {
+						req.Steps[si].Filters[fi].Operator = "in"
+					} else if f.Operator == "neq" || f.Operator == "is_not" {
+						req.Steps[si].Filters[fi].Operator = "not_in"
+					}
+				}
+			} else {
+				expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+				if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+					req.Steps[si].Filters[fi].ExpandedProperties = expanded
+				}
 			}
 		}
 	}
