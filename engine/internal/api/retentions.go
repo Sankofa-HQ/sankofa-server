@@ -68,21 +68,9 @@ func (h *RetentionsHandler) CalculateRetention(c *fiber.Ctx) error {
 
 	// Filter Expansions
 	for i, f := range req.GlobalFilters {
-		if f.Property == "event_name" {
-			expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
-			req.GlobalFilters[i].Values = expanded
-			if len(expanded) > 1 {
-				if f.Operator == "eq" || f.Operator == "is" {
-					req.GlobalFilters[i].Operator = "in"
-				} else if f.Operator == "neq" || f.Operator == "is_not" {
-					req.GlobalFilters[i].Operator = "not_in"
-				}
-			}
-		} else {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.GlobalFilters[i].ExpandedProperties = expanded
-			}
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+			req.GlobalFilters[i].ExpandedProperties = expanded
 		}
 	}
 
@@ -242,21 +230,9 @@ func (h *RetentionsHandler) RetentionUsers(c *fiber.Ctx) error {
 
 	// Expand global filters
 	for i, f := range req.GlobalFilters {
-		if f.Property == "event_name" {
-			expanded := ExpandVirtualEventNames(h.db, projectID, req.Environment, f.Values)
-			req.GlobalFilters[i].Values = expanded
-			if len(expanded) > 1 {
-				if f.Operator == "eq" || f.Operator == "is" {
-					req.GlobalFilters[i].Operator = "in"
-				} else if f.Operator == "neq" || f.Operator == "is_not" {
-					req.GlobalFilters[i].Operator = "not_in"
-				}
-			}
-		} else {
-			expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.GlobalFilters[i].ExpandedProperties = expanded
-			}
+		expanded := ExpandVirtualPropertyNames(h.db, projectID, req.Environment, f.Property)
+		if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
+			req.GlobalFilters[i].ExpandedProperties = expanded
 		}
 	}
 

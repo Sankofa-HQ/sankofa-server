@@ -73,26 +73,6 @@ func (h *FlowsHandler) CalculateFlow(c *fiber.Ctx) error {
 		}
 	}
 
-	// Expand global filters
-	for i, f := range req.GlobalFilters {
-		if f.Property == "event_name" {
-			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, f.Values)
-			req.GlobalFilters[i].Values = expanded
-			if len(expanded) > 1 {
-				if f.Operator == "eq" || f.Operator == "is" {
-					req.GlobalFilters[i].Operator = "in"
-				} else if f.Operator == "neq" || f.Operator == "is_not" {
-					req.GlobalFilters[i].Operator = "not_in"
-				}
-			}
-		} else {
-			expanded := ExpandVirtualPropertyNames(h.db, req.ProjectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.GlobalFilters[i].ExpandedProperties = expanded
-			}
-		}
-	}
-
 	query, args := database.BuildFlowQuery(req)
 
 	rows, err := h.chConn.Query(ctx, query, args...)
@@ -186,26 +166,6 @@ func (h *FlowsHandler) FlowUsers(c *fiber.Ctx) error {
 			req.StartEventExpanded = expandedStart
 		} else {
 			req.StartEventExpanded = []string{req.StartEvent}
-		}
-	}
-
-	// Expand global filters
-	for i, f := range req.GlobalFilters {
-		if f.Property == "event_name" {
-			expanded := ExpandVirtualEventNames(h.db, req.ProjectID, req.Environment, f.Values)
-			req.GlobalFilters[i].Values = expanded
-			if len(expanded) > 1 {
-				if f.Operator == "eq" || f.Operator == "is" {
-					req.GlobalFilters[i].Operator = "in"
-				} else if f.Operator == "neq" || f.Operator == "is_not" {
-					req.GlobalFilters[i].Operator = "not_in"
-				}
-			}
-		} else {
-			expanded := ExpandVirtualPropertyNames(h.db, req.ProjectID, req.Environment, f.Property)
-			if len(expanded) > 1 || (len(expanded) == 1 && expanded[0] != f.Property) {
-				req.GlobalFilters[i].ExpandedProperties = expanded
-			}
 		}
 	}
 
