@@ -56,11 +56,11 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 	}
 
 	innerQuery := fmt.Sprintf(
-		`SELECT distinct_id, min(%s(timestamp)) AS user_start_date
+		`SELECT distinct_id, min(%s(timestamp, '%s')) AS user_start_date
 		 FROM events
 		 WHERE %s
 		 GROUP BY distinct_id`,
-		timeBucket, innerWhereStmt,
+		timeBucket, req.Timezone, innerWhereStmt,
 	)
 
 	// We need the full event range for the outer join (not just the cohort date range)
@@ -71,7 +71,7 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 
 	// Filter to the specific cohort date
 	// parseDateTimeBestEffort handles full timestamp or ISO strings properly.
-	cohortFilter := fmt.Sprintf("%s(u.user_start_date) = %s(parseDateTimeBestEffort('%s'))", timeBucket, timeBucket, cohortDate)
+	cohortFilter := fmt.Sprintf("%s(u.user_start_date, '%s') = %s(parseDateTimeBestEffort('%s'), '%s')", timeBucket, req.Timezone, timeBucket, cohortDate, req.Timezone)
 
 	if periodIdx == 0 {
 		// Users who did the start event in this cohort bucket
@@ -92,13 +92,15 @@ func BuildRetentionUsersQuery(req models.RetentionRequest, cohortDate string, pe
 		`SELECT DISTINCT u.distinct_id AS distinct_id
 		 FROM events e
 		 INNER JOIN (%s) u ON e.distinct_id = u.distinct_id
-		 WHERE %s AND %s AND %s AND dateDiff('%s', u.user_start_date, %s(e.timestamp)) = %d`,
+		 WHERE %s AND %s AND %s AND dateDiff('%s', u.user_start_date, %s(e.timestamp, '%s'), '%s') = %d`,
 		innerQuery,
 		outerWhere,
 		cohortFilter,
 		strings.ReplaceAll(returnCond, "event_name", "e.event_name"),
 		chIntervalUnit,
 		timeBucket,
+		req.Timezone,
+		req.Timezone,
 		periodIdx,
 	)
 

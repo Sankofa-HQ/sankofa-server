@@ -354,12 +354,12 @@ func main() {
 	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth) // Lexicon under /api/v1/lexicon
 
 	// Analysis routes: Read= Viewer+, Write=Editor+
-	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Funnels under /api/v1/funnels
-	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth)      // Flows under /api/v1/flows
-	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth)   // Insights under /api/v1/insights
-	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth) // Retentions under /api/v1/retentions
-	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth)     // Boards under /api/v1/boards
-	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth)    // Widgets under /api/v1/widgets
+	funnelsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
+	flowsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
+	insightsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
+	retentionsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
+	boardsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
+	widgetsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)

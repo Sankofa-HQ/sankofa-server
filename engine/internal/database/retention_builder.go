@@ -116,7 +116,7 @@ func BuildRetentionQuery(req models.RetentionRequest) (string, []any) {
 		// cond1 = (event_name = 'Start')
 		// cond2 = (event_name = 'Return' AND dateDiff('day', min_start_date_for_user, timestamp) = 1)
 
-		cond := fmt.Sprintf("(%s AND dateDiff('%s', user_start_date, timestamp) = %d)", returnCond, chIntervalUnit, i)
+		cond := fmt.Sprintf("(%s AND dateDiff('%s', user_start_date, timestamp, '%s') = %d)", returnCond, chIntervalUnit, req.Timezone, i)
 		retentionConds = append(retentionConds, cond)
 	}
 
@@ -134,10 +134,10 @@ func BuildRetentionQuery(req models.RetentionRequest) (string, []any) {
 		innerArgs = append(innerArgs, req.GlobalDateRange.Start, req.GlobalDateRange.End)
 	}
 
-	innerQuery := fmt.Sprintf(`SELECT distinct_id, min(%s(timestamp)) AS user_start_date 
+	innerQuery := fmt.Sprintf(`SELECT distinct_id, min(%s(timestamp, '%s')) AS user_start_date 
         FROM events 
         WHERE %s 
-        GROUP BY distinct_id`, timeBucket, innerWhereStmt)
+        GROUP BY distinct_id`, timeBucket, req.Timezone, innerWhereStmt)
 
 	// MIDDLE QUERY: Join events with user_start_dates and evaluate conditions
 	// We need breakdowns here too!

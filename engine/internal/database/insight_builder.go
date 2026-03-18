@@ -121,7 +121,7 @@ func BuildInsightQuery(req models.InsightRequest) (string, []any) {
 
 		// Build SELECT columns
 		selectCols := []string{
-			fmt.Sprintf("%s(timestamp) AS time_bucket", timeBucket),
+			fmt.Sprintf("%s(timestamp, '%s') AS time_bucket", timeBucket, req.Timezone),
 			fmt.Sprintf("%d AS metric_index", mi),
 		}
 		selectCols = append(selectCols, breakdownSelectExprs...)

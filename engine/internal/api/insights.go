@@ -48,6 +48,14 @@ func (h *InsightsHandler) QueryInsight(c *fiber.Ctx) error {
 
 	req.ProjectID = projectID
 
+	// Extract project from context (populated by middleware)
+	if project, ok := c.Locals("project").(database.Project); ok {
+		req.Timezone = project.Timezone
+	}
+	if req.Timezone == "" {
+		req.Timezone = "UTC"
+	}
+
 	if req.Environment == "" {
 		req.Environment = c.Query("environment", "live")
 	}

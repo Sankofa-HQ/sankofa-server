@@ -13,6 +13,7 @@ type InsightMetric struct {
 type InsightRequest struct {
 	ProjectID          string            `json:"project_id"`
 	Environment        string            `json:"environment"` // "live" or "test"
+	Timezone           string            `json:"timezone"`    // Added
 	GlobalDateRange    DateRange         `json:"global_date_range"`
 	Interval           string            `json:"interval"` // "day", "week", "month"
 	Metrics            []InsightMetric   `json:"metrics"`

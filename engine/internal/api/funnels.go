@@ -50,6 +50,14 @@ func (h *FunnelsHandler) CalculateFunnel(c *fiber.Ctx) error {
 	// Ensure projectID is populated from URL path overrides body
 	req.ProjectID = projectID
 
+	// Extract project from context (populated by middleware)
+	if project, ok := c.Locals("project").(database.Project); ok {
+		req.Timezone = project.Timezone
+	}
+	if req.Timezone == "" {
+		req.Timezone = "UTC"
+	}
+
 	// Use environment from context or query params if not in body
 	if req.Environment == "" {
 		req.Environment = c.Query("environment", "live")
@@ -199,6 +207,14 @@ func (h *FunnelsHandler) FunnelUsers(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	req.ProjectID = projectID
+
+	// Extract project from context (populated by middleware)
+	if project, ok := c.Locals("project").(database.Project); ok {
+		req.Timezone = project.Timezone
+	}
+	if req.Timezone == "" {
+		req.Timezone = "UTC"
+	}
 	if req.Environment == "" {
 		req.Environment = c.Query("environment", "live")
 	}

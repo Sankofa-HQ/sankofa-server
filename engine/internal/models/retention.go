@@ -4,6 +4,7 @@ package models
 type RetentionRequest struct {
 	ProjectID           string            `json:"project_id"`
 	Environment         string            `json:"environment"` // "live" or "test"
+	Timezone            string            `json:"timezone"`
 	StartEvent          string            `json:"start_event"`
 	ExpandedStartEvent  []string          `json:"-"`
 	ReturnEvent         string            `json:"return_event"`

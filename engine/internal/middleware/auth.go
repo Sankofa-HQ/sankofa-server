@@ -136,23 +136,27 @@ func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
 
 		projectID := c.Get("x-project-id")
 		if projectID == "" {
+			projectID = c.Params("project_id")
+		}
+		if projectID == "" {
 			// Also check locals (in case it was set by a preceding middleware)
 			projectID, _ = c.Locals("project_id").(string)
 		}
 		if projectID == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Missing x-project-id header"})
+			return c.Status(400).JSON(fiber.Map{"error": "Missing project ID (header 'x-project-id' or path param 'project_id' required)"})
 		}
 
 		// --- Org-Owner bypass ---
 		// If the user is an Owner or Admin of the org that owns this project,
 		// grant them implicit Admin-level project access.
 		var project database.Project
-		if err := m.DB.Select("organization_id").Where("id = ?", projectID).First(&project).Error; err == nil {
+		if err := m.DB.Where("id = ?", projectID).First(&project).Error; err == nil {
 			var orgMember database.OrganizationMember
 			if m.DB.Where("organization_id = ? AND user_id = ?", project.OrganizationID, userID).First(&orgMember).Error == nil {
 				if orgMember.Role == "Owner" || orgMember.Role == "Admin" {
 					c.Locals("project_id", projectID)
 					c.Locals("project_role", orgMember.Role) // use org role as effective project role
+					c.Locals("project", project)             // Store full project context
 					return c.Next()
 				}
 			}
@@ -164,6 +168,11 @@ func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
 			return c.Status(403).JSON(fiber.Map{"error": "Access denied: you are not a member of this project"})
 		}
 
+		// If we didn't bypass above, we still need the full project for the handler context
+		if err := m.DB.Where("id = ?", projectID).First(&project).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+
 		if !hasSufficientProjectRole(member.Role, minRole) {
 			return c.Status(403).JSON(fiber.Map{
 				"error": fmt.Sprintf("Insufficient permissions. Required: %s, your role: %s", minRole, member.Role),
@@ -172,6 +181,7 @@ func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
 
 		c.Locals("project_id", projectID)
 		c.Locals("project_role", member.Role)
+		c.Locals("project", project) // Store full project context
 		return c.Next()
 	}
 }
