@@ -71,6 +71,8 @@ type Project struct {
 	Timezone          string        `gorm:"default:'Africa/Accra'" json:"timezone"`
 	Region            string        `gorm:"default:'eu-west-1'" json:"region"`
 	AutoApproveEvents bool          `gorm:"default:true" json:"auto_approve_events"` // If false, new events enter quarantine as 'pending'
+	AuthorizedDomains string        `gorm:"type:text" json:"authorized_domains"` // Comma-separated
+	AuthorizedIPs     string        `gorm:"type:text" json:"authorized_ips"`     // Comma-separated
 	CreatedByID       string        `json:"created_by_id" gorm:"column:created_by_id;index;type:varchar(32)"`
 	CreatedBy         *User         `json:"created_by" gorm:"foreignKey:CreatedByID"`
 	CreatedAt         time.Time     `json:"created_at"`

@@ -26,7 +26,7 @@ type analyticsBatchOperation struct {
 
 func newTrackIngestHandler(db *gorm.DB, eventStream chan<- AnalyticsEvent) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"))
+		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"), c.Get("Origin"), normalizedClientIP(c.IP()))
 		if err != nil {
 			return err
 		}
@@ -47,7 +47,7 @@ func newTrackIngestHandler(db *gorm.DB, eventStream chan<- AnalyticsEvent) fiber
 
 func newPeopleIngestHandler(db *gorm.DB, personStream chan<- PersonProfile) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"))
+		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"), c.Get("Origin"), normalizedClientIP(c.IP()))
 		if err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ func newPeopleIngestHandler(db *gorm.DB, personStream chan<- PersonProfile) fibe
 
 func newAliasIngestHandler(db *gorm.DB, aliasStream chan<- PersonAlias) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"))
+		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"), c.Get("Origin"), normalizedClientIP(c.IP()))
 		if err != nil {
 			return err
 		}
@@ -94,7 +94,7 @@ func newBatchIngestHandler(
 	aliasStream chan<- PersonAlias,
 ) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"))
+		project, environment, err := resolveProjectForAPIKey(db, c.Get("x-api-key"), c.Get("Origin"), normalizedClientIP(c.IP()))
 		if err != nil {
 			return err
 		}
@@ -172,21 +172,55 @@ func newBatchIngestHandler(
 	}
 }
 
-func resolveProjectForAPIKey(db *gorm.DB, apiKey string) (database.Project, string, error) {
+func resolveProjectForAPIKey(db *gorm.DB, apiKey string, origin string, clientIP string) (database.Project, string, error) {
 	if apiKey == "" {
 		log.Println("⚠️ Missing API Key")
 		return database.Project{}, "", fiber.NewError(fiber.StatusUnauthorized, "Missing API Key")
 	}
 
 	var project database.Project
+	environment := ""
 	if err := db.Where("api_key = ?", apiKey).First(&project).Error; err == nil {
-		return project, "live", nil
-	}
-	if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
-		return project, "test", nil
+		environment = "live"
+	} else if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
+		environment = "test"
+	} else {
+		return database.Project{}, "", fiber.NewError(fiber.StatusForbidden, "Invalid API Key")
 	}
 
-	return database.Project{}, "", fiber.NewError(fiber.StatusForbidden, "Invalid API Key")
+	if origin != "" {
+		if project.AuthorizedDomains != "" {
+			authorized := false
+			domains := strings.Split(project.AuthorizedDomains, ",")
+			for _, d := range domains {
+				if strings.TrimSpace(d) == origin {
+					authorized = true
+					break
+				}
+			}
+			if !authorized {
+				log.Printf("⚠️ Unauthorized Origin: %s for project: %s", origin, project.ID)
+				return database.Project{}, "", fiber.NewError(fiber.StatusForbidden, "Unauthorized Origin")
+			}
+		}
+	} else {
+		if project.AuthorizedIPs != "" {
+			authorized := false
+			ips := strings.Split(project.AuthorizedIPs, ",")
+			for _, ip := range ips {
+				if strings.TrimSpace(ip) == clientIP {
+					authorized = true
+					break
+				}
+			}
+			if !authorized {
+				log.Printf("⚠️ Unauthorized IP: %s for project: %s", clientIP, project.ID)
+				return database.Project{}, "", fiber.NewError(fiber.StatusForbidden, "Unauthorized IP Address")
+			}
+		}
+	}
+
+	return project, environment, nil
 }
 
 func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, environment string, clientIP string) {

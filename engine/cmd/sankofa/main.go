@@ -76,7 +76,7 @@ func loadConfig() {
 	ADMIN_ORG_NAME = getEnv("ADMIN_ORG_NAME", "Sankofa Admin Org")
 	ADMIN_PROJECT_NAME = getEnv("ADMIN_PROJECT_NAME", "Sankofa Internal")
 	GEOIP_DB_PATH = getEnv("GEOIP_DB_PATH", "")
-	ROOT_REDIRECT_URL = getEnv("ROOT_REDIRECT_URL", "")
+	ROOT_REDIRECT_URL = getEnv("ROOT_REDIRECT_URL", "https://sankofa.dev")
 	FRONTEND_URL = getEnv("FRONTEND_URL", "http://localhost:3000")
 
 	B2_KEY_ID = getEnv("B2_KEY_ID", "")
@@ -234,6 +234,9 @@ func main() {
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	}))
 
+	// INGESTION RATE LIMITER (Protecting endpoints from flooding)
+	ingestLimiter := middleware.IngestLimiter()
+
 	// Redirect root API visits to the configured landing/docs page, or fallback to frontend
 	app.Get("/", func(c *fiber.Ctx) error {
 		if ROOT_REDIRECT_URL != "" {
@@ -390,10 +393,12 @@ func main() {
 	*/
 
 	// INGESTION (v1)
-	v1.Post("/batch", newBatchIngestHandler(db, eventStream, personStream, aliasStream))
-	v1.Post("/track", newTrackIngestHandler(db, eventStream))
-	v1.Post("/people", newPeopleIngestHandler(db, personStream))
-	v1.Post("/alias", newAliasIngestHandler(db, aliasStream))
+	v1Ingest := v1.Group("/")
+	v1Ingest.Use(ingestLimiter)
+	v1Ingest.Post("/batch", newBatchIngestHandler(db, eventStream, personStream, aliasStream))
+	v1Ingest.Post("/track", newTrackIngestHandler(db, eventStream))
+	v1Ingest.Post("/people", newPeopleIngestHandler(db, personStream))
+	v1Ingest.Post("/alias", newAliasIngestHandler(db, aliasStream))
 
 	// START SERVER
 	go func() {

@@ -234,10 +234,12 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	}
 
 	type Request struct {
-		Name              string `json:"name"`
-		Timezone          string `json:"timezone"`
-		Environment       string `json:"environment"`
-		AutoApproveEvents *bool  `json:"auto_approve_events"`
+		Name              string  `json:"name"`
+		Timezone          string  `json:"timezone"`
+		Environment       string  `json:"environment"`
+		AutoApproveEvents *bool   `json:"auto_approve_events"`
+		AuthorizedDomains *string `json:"authorized_domains"`
+		AuthorizedIPs     *string `json:"authorized_ips"`
 	}
 	var req Request
 	if err := c.BodyParser(&req); err != nil {
@@ -271,6 +273,12 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 	}
 	if req.AutoApproveEvents != nil {
 		project.AutoApproveEvents = *req.AutoApproveEvents
+	}
+	if req.AuthorizedDomains != nil {
+		project.AuthorizedDomains = *req.AuthorizedDomains
+	}
+	if req.AuthorizedIPs != nil {
+		project.AuthorizedIPs = *req.AuthorizedIPs
 	}
 
 	if err := h.DB.Save(&project).Error; err != nil {
