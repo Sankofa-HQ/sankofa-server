@@ -395,6 +395,13 @@ func main() {
 	// INGESTION (v1)
 	v1Ingest := v1.Group("/")
 	v1Ingest.Use(ingestLimiter)
+	// Specific CORS for ingestion: permissive at middleware level, but strictly enforced at handler level via domain whitelist
+	v1Ingest.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "POST, OPTIONS",
+		AllowHeaders: "Origin, Content-Type, Accept, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
+	}))
+
 	v1Ingest.Post("/batch", newBatchIngestHandler(db, eventStream, personStream, aliasStream))
 	v1Ingest.Post("/track", newTrackIngestHandler(db, eventStream))
 	v1Ingest.Post("/people", newPeopleIngestHandler(db, personStream))

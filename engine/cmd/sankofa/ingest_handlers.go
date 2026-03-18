@@ -260,13 +260,12 @@ func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, env
 	if model, ok := event.DefaultProperties["$device_model"]; ok {
 		event.DeviceModel = model
 	}
-
 	if database.Store != nil {
 		props := make(map[string]interface{}, len(event.Properties))
 		for key, value := range event.Properties {
 			props[key] = value
 		}
-		database.Store.TrackEvent(event.ProjectID, event.EventName, props)
+		database.Store.TrackEvent(event.ProjectID, event.Environment, event.EventName, props)
 	}
 }
 

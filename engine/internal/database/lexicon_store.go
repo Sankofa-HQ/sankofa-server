@@ -15,8 +15,8 @@ import (
 // It handles both Event Names and Event Properties.
 type LexiconStore struct {
 	DB               *gorm.DB
-	eventNameCache   sync.Map // Key: "projectID:eventName" -> Value: eventID (string)
-	propertyCache    sync.Map // Key: "projectID:eventName:propertyName" -> Value: true
+	eventNameCache   sync.Map // Key: "projectID:environment:eventName" -> Value: eventID (string)
+	propertyCache    sync.Map // Key: "projectID:environment:eventName:propertyName" -> Value: true
 	projectSettings  sync.Map // Key: projectID -> Value: bool (autoApproveEvents)
 	newLexiconQueue  chan lexiconEntry
 	newPropertyQueue chan propertyEntry
@@ -25,15 +25,17 @@ type LexiconStore struct {
 }
 
 type lexiconEntry struct {
-	ProjectID string
-	EventName string
+	ProjectID   string
+	Environment string
+	EventName   string
 }
 
 type propertyEntry struct {
-	ProjectID string
-	EventName string
-	Name      string
-	Type      string
+	ProjectID   string
+	Environment string
+	EventName   string
+	Name        string
+	Type        string
 }
 
 // Global instance
@@ -60,11 +62,11 @@ func InitLexiconStore(db *gorm.DB) *LexiconStore {
 func (s *LexiconStore) loadCache() {
 	// 1. Load Events
 	var events []LexiconEvent
-	if err := s.DB.Select("id", "project_id", "name").Find(&events).Error; err != nil {
+	if err := s.DB.Select("id", "project_id", "environment", "name").Find(&events).Error; err != nil {
 		log.Println("⚠️ Failed to load Lexicon cache:", err)
 	} else {
 		for _, e := range events {
-			key := fmt.Sprintf("%s:%s", e.ProjectID, e.Name)
+			key := fmt.Sprintf("%s:%s:%s", e.ProjectID, e.Environment, e.Name)
 			s.eventNameCache.Store(key, e.ID)
 		}
 		log.Printf("✅ Lexicon Cache Loaded: %d events", len(events))
@@ -73,7 +75,7 @@ func (s *LexiconStore) loadCache() {
 	// 2. Load Properties
 	// We need Event Name to form the cache key, so we join with lexicon_events
 	rows, err := s.DB.Table("lexicon_event_properties").
-		Select("lexicon_event_properties.project_id, lexicon_events.name as event_name, lexicon_event_properties.name").
+		Select("lexicon_event_properties.project_id, lexicon_event_properties.environment, lexicon_events.name as event_name, lexicon_event_properties.name").
 		Joins("JOIN lexicon_events ON lexicon_event_properties.event_id = lexicon_events.id").
 		Rows()
 
@@ -84,9 +86,10 @@ func (s *LexiconStore) loadCache() {
 		count := 0
 		for rows.Next() {
 			var pid string
+			var env string
 			var eName, pName string
-			if err := rows.Scan(&pid, &eName, &pName); err == nil {
-				key := fmt.Sprintf("%s:%s:%s", pid, eName, pName)
+			if err := rows.Scan(&pid, &env, &eName, &pName); err == nil {
+				key := fmt.Sprintf("%s:%s:%s:%s", pid, env, eName, pName)
 				s.propertyCache.Store(key, true)
 				count++
 			}
@@ -96,17 +99,20 @@ func (s *LexiconStore) loadCache() {
 }
 
 // TrackEvent handles the "Fast Path". Checks RAM, queues if new.
-func (s *LexiconStore) TrackEvent(projectIDStr string, eventName string, properties map[string]interface{}) {
+func (s *LexiconStore) TrackEvent(projectIDStr string, environment string, eventName string, properties map[string]interface{}) {
 	pID := projectIDStr
+	if environment == "" {
+		environment = "live"
+	}
 
 	// 1. Handle Event Name
-	eventKey := fmt.Sprintf("%s:%s", pID, eventName)
+	eventKey := fmt.Sprintf("%s:%s:%s", pID, environment, eventName)
 	if _, exists := s.eventNameCache.Load(eventKey); !exists {
 		// Mark as seen (ID="" means pending/queued) to prevent dup queueing
 		s.eventNameCache.Store(eventKey, "")
 
 		select {
-		case s.newLexiconQueue <- lexiconEntry{ProjectID: pID, EventName: eventName}:
+		case s.newLexiconQueue <- lexiconEntry{ProjectID: pID, Environment: environment, EventName: eventName}:
 		default:
 			log.Println("⚠️ Lexicon Queue Full! Dropping new event:", eventName)
 		}
@@ -114,7 +120,7 @@ func (s *LexiconStore) TrackEvent(projectIDStr string, eventName string, propert
 
 	// 2. Handle Properties
 	for key, val := range properties {
-		propKey := fmt.Sprintf("%s:%s:%s", pID, eventName, key)
+		propKey := fmt.Sprintf("%s:%s:%s:%s", pID, environment, eventName, key)
 		if _, exists := s.propertyCache.Load(propKey); !exists {
 			s.propertyCache.Store(propKey, true)
 
@@ -133,10 +139,11 @@ func (s *LexiconStore) TrackEvent(projectIDStr string, eventName string, propert
 
 			select {
 			case s.newPropertyQueue <- propertyEntry{
-				ProjectID: pID,
-				EventName: eventName,
-				Name:      key,
-				Type:      propType,
+				ProjectID:   pID,
+				Environment: environment,
+				EventName:   eventName,
+				Name:        key,
+				Type:        propType,
 			}:
 			default:
 				// Drop property if queue full
@@ -194,7 +201,7 @@ func (s *LexiconStore) processQueue() {
 func (s *LexiconStore) insertEventBatch(batch []lexiconEntry) {
 	uniqueEntries := make(map[string]lexiconEntry)
 	for _, entry := range batch {
-		key := fmt.Sprintf("%s:%s", entry.ProjectID, entry.EventName)
+		key := fmt.Sprintf("%s:%s:%s", entry.ProjectID, entry.Environment, entry.EventName)
 		uniqueEntries[key] = entry
 	}
 
@@ -205,6 +212,7 @@ func (s *LexiconStore) insertEventBatch(batch []lexiconEntry) {
 		status := s.resolveStatus(entry.ProjectID)
 		eventsToInsert = append(eventsToInsert, LexiconEvent{
 			ProjectID:   entry.ProjectID,
+			Environment: entry.Environment,
 			Name:        entry.EventName,
 			Status:      status,
 			CreatedAt:   now,
@@ -216,7 +224,7 @@ func (s *LexiconStore) insertEventBatch(batch []lexiconEntry) {
 	if len(eventsToInsert) > 0 {
 		// Insert Ignore
 		if err := s.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "project_id"}, {Name: "name"}},
+			Columns:   []clause.Column{{Name: "project_id"}, {Name: "environment"}, {Name: "name"}},
 			DoNothing: true,
 		}).Create(&eventsToInsert).Error; err != nil {
 			log.Println("❌ Failed to insert Lexicon batch:", err)
@@ -236,12 +244,12 @@ func (s *LexiconStore) insertEventBatch(batch []lexiconEntry) {
 
 		for pid, names := range eventsByProject {
 			var foundEvents []LexiconEvent
-			if err := s.DB.Select("id", "name").
+			if err := s.DB.Select("id", "environment", "name").
 				Where("project_id = ? AND name IN ?", pid, names).
 				Find(&foundEvents).Error; err == nil {
 
 				for _, fe := range foundEvents {
-					key := fmt.Sprintf("%s:%s", pid, fe.Name)
+					key := fmt.Sprintf("%s:%s:%s", pid, fe.Environment, fe.Name)
 					s.eventNameCache.Store(key, fe.ID)
 				}
 			}
@@ -252,7 +260,7 @@ func (s *LexiconStore) insertEventBatch(batch []lexiconEntry) {
 func (s *LexiconStore) insertPropBatch(batch []propertyEntry) {
 	uniqueProps := make(map[string]propertyEntry)
 	for _, entry := range batch {
-		key := fmt.Sprintf("%s:%s:%s", entry.ProjectID, entry.EventName, entry.Name)
+		key := fmt.Sprintf("%s:%s:%s:%s", entry.ProjectID, entry.Environment, entry.EventName, entry.Name)
 		uniqueProps[key] = entry
 	}
 
@@ -261,7 +269,7 @@ func (s *LexiconStore) insertPropBatch(batch []propertyEntry) {
 
 	// Need to resolve Event IDs
 	for _, entry := range uniqueProps {
-		eventKey := fmt.Sprintf("%s:%s", entry.ProjectID, entry.EventName)
+		eventKey := fmt.Sprintf("%s:%s:%s", entry.ProjectID, entry.Environment, entry.EventName)
 
 		val, ok := s.eventNameCache.Load(eventKey)
 		if !ok || val == nil {
@@ -281,6 +289,7 @@ func (s *LexiconStore) insertPropBatch(batch []propertyEntry) {
 		status := s.resolveStatus(entry.ProjectID)
 		propsToInsert = append(propsToInsert, LexiconEventProperty{
 			ProjectID:   entry.ProjectID,
+			Environment: entry.Environment,
 			EventID:     &eID,
 			Name:        entry.Name,
 			Status:      status,
@@ -293,7 +302,7 @@ func (s *LexiconStore) insertPropBatch(batch []propertyEntry) {
 
 	if len(propsToInsert) > 0 {
 		err := s.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "project_id"}, {Name: "event_id"}, {Name: "name"}},
+			Columns:   []clause.Column{{Name: "project_id"}, {Name: "environment"}, {Name: "event_id"}, {Name: "name"}},
 			DoNothing: true,
 		}).Create(&propsToInsert).Error
 
