@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +25,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -52,6 +56,9 @@ var (
 	B2_APP_KEY     string
 	B2_BUCKET_NAME string
 	B2_ENDPOINT    string
+
+	// Alerts
+	DISCORD_WEBHOOK string
 )
 
 func loadConfig() {
@@ -84,6 +91,8 @@ func loadConfig() {
 	B2_APP_KEY = getEnv("B2_APP_KEY", "")
 	B2_BUCKET_NAME = getEnv("B2_BUCKET_NAME", "sankofa-replays")
 	B2_ENDPOINT = getEnv("B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
+
+	DISCORD_WEBHOOK = getEnv("DISCORD_WEBHOOK", "")
 }
 
 func getEnv(key, fallback string) string {
@@ -227,7 +236,28 @@ func main() {
 	// 5. START WEB SERVER
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
+		ErrorHandler: func(c *fiber.Ctx, err error) error {
+			code := fiber.StatusInternalServerError
+			if e, ok := err.(*fiber.Error); ok {
+				code = e.Code
+			}
+
+			// If it's a 500 (Server Crash) or 400 (Bad JSON from the Beta Tester)
+			if code >= 500 && DISCORD_WEBHOOK != "" {
+				msg := fmt.Sprintf("🚨 **SANKOFA ENGINE ALERT** 🚨\n**Path**: `%s`\n**Status**: `%d`\n**Error**: `%v`\n**IP**: `%s`",
+					c.Path(), code, err.Error(), c.IP())
+				fireDiscordAlert(DISCORD_WEBHOOK, msg)
+			}
+
+			return c.Status(code).JSON(fiber.Map{
+				"ok":    false,
+				"error": err.Error(),
+			})
+		},
 	})
+
+	// RECOVERY MIDDLEWARE: Catches panics and sends them to the ErrorHandler
+	app.Use(recover.New())
 	// Define CORS Middlewares
 	dashboardCORS := cors.New(cors.Config{
 		AllowOrigins:     CORS_ALLOWED_ORIGINS,
@@ -720,4 +750,22 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 	db.Model(&admin).Update("current_project_id", project.ID)
 
 	fmt.Printf("✅ Seed Complete. Login: %s / <your-password>\n", ADMIN_EMAIL)
+}
+
+// --- HELPERS ---
+
+func fireDiscordAlert(webhookURL, message string) {
+	if webhookURL == "" {
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"content": message})
+	// Run in background to avoid blocking request
+	go func() {
+		resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(payload))
+		if err != nil {
+			log.Printf("⚠️ Discord alert failed: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+	}()
 }
