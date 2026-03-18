@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -227,12 +228,19 @@ func main() {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 	})
-	app.Use(cors.New(cors.Config{
+	// Define CORS Middlewares
+	dashboardCORS := cors.New(cors.Config{
 		AllowOrigins:     CORS_ALLOWED_ORIGINS,
 		AllowCredentials: true,
 		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
-	}))
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-api-key, x-project-id, x-org-id",
+	})
+
+	ingestCORS := cors.New(cors.Config{
+		AllowOrigins: "*", // Permissive for data collection preflights; strictly validated in handlers via Dashboard settings
+		AllowMethods: "POST, OPTIONS", // No GET needed for standard ingestion
+		AllowHeaders: "Origin, Content-Type, Accept, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
+	})
 
 	// INGESTION RATE LIMITER (Protecting endpoints from flooding)
 	ingestLimiter := middleware.IngestLimiter()
@@ -255,8 +263,35 @@ func main() {
 		})
 	})
 
-	apiRouter := app.Group("/api")
-	v1 := apiRouter.Group("/v1")
+	// 1. INGESTION (v1/batch, v1/people, etc.) - DEFINED BEFORE restrictive CORS
+	ingestV1 := app.Group("/api/v1")
+	ingestV1.Use(ingestCORS) // Permissive CORS for data collection
+	ingestV1.Use(ingestLimiter)
+
+	ingestV1.Post("/batch", newBatchIngestHandler(db, eventStream, personStream, aliasStream))
+	ingestV1.Post("/track", newTrackIngestHandler(db, eventStream))
+	ingestV1.Post("/people", newPeopleIngestHandler(db, personStream))
+	ingestV1.Post("/alias", newAliasIngestHandler(db, aliasStream))
+
+	// 2. RESTRICTIVE DASHBOARD API
+	apiRouter := app.Group("/api", func(c *fiber.Ctx) error {
+		// INGESTION EXEMPTION: Skip restrictive CORS for ingestion routes
+		// Since these routes use a prefix that already starts with /api (like /api/v1/batch 
+		// or /api/replay), we must bypass the Dashboard CORS here so they can use
+		// their own permissive ingestion CORS further down the stack.
+		path := c.Path()
+		if strings.HasPrefix(path, "/api/v1/batch") || 
+		   strings.HasPrefix(path, "/api/v1/track") || 
+		   strings.HasPrefix(path, "/api/v1/people") || 
+		   strings.HasPrefix(path, "/api/v1/alias") || 
+		   strings.HasPrefix(path, "/api/replay/chunk") || 
+		   strings.HasPrefix(path, "/api/ee/replay/chunk") {
+			return c.Next()
+		}
+		return dashboardCORS(c)
+	})
+	
+	v1 := apiRouter.Group("/v1") // This v1 is for reading data and management APIs
 
 	// HANDLERS
 	emailManager := email.NewManager()
@@ -392,20 +427,7 @@ func main() {
 		})
 	*/
 
-	// INGESTION (v1)
-	v1Ingest := v1.Group("/")
-	v1Ingest.Use(ingestLimiter)
-	// Specific CORS for ingestion: permissive at middleware level, but strictly enforced at handler level via domain whitelist
-	v1Ingest.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowMethods: "POST, OPTIONS",
-		AllowHeaders: "Origin, Content-Type, Accept, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
-	}))
-
-	v1Ingest.Post("/batch", newBatchIngestHandler(db, eventStream, personStream, aliasStream))
-	v1Ingest.Post("/track", newTrackIngestHandler(db, eventStream))
-	v1Ingest.Post("/people", newPeopleIngestHandler(db, personStream))
-	v1Ingest.Post("/alias", newAliasIngestHandler(db, aliasStream))
+	// (Ingestion routes have been moved to top-level app for CORS decoupling)
 
 	// START SERVER
 	go func() {
