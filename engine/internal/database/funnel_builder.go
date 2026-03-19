@@ -65,9 +65,13 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		breakdownAliases = append(breakdownAliases, alias)
 	}
 
-	// 2. Build windowFunnel conditions
-	var conditions []string
-	for _, step := range req.Steps {
+	// 2. Build step conditions (booleans)
+	var stepMatchExprs []string
+	var stepMatchAliases []string
+	var stepFilterArgs []any
+
+	for i, step := range req.Steps {
+		alias := fmt.Sprintf("step_%d_match", i+1)
 		var cond string
 		if len(step.ExpandedEvents) > 1 {
 			var escaped []string
@@ -84,13 +88,15 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		}
 
 		if len(step.Filters) > 0 {
-			filterStmt, filterArgs := buildFilterConds(step.Filters)
+			filterStmt, fArgs := buildFilterConds(step.Filters)
 			if filterStmt != "" {
-				cond = cond + " AND " + filterStmt
-				args = append(args, filterArgs...)
+				cond = "(" + cond + " AND " + filterStmt + ")"
+				stepFilterArgs = append(stepFilterArgs, fArgs...)
 			}
 		}
-		conditions = append(conditions, cond)
+
+		stepMatchExprs = append(stepMatchExprs, fmt.Sprintf("%s AS %s", cond, alias))
+		stepMatchAliases = append(stepMatchAliases, alias)
 	}
 
 	modeArgs := ", 'strict_deduplication'"
@@ -98,27 +104,45 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		modeArgs = ", 'strict_order', 'strict_deduplication'"
 	}
 
-	windowFunnelCall := fmt.Sprintf("windowFunnel(%d%s)(\n                timestamp,\n                %s\n            )", defaultWindowSeconds, modeArgs, strings.Join(conditions, ",\n                "))
+	windowFunnelCall := fmt.Sprintf("windowFunnel(%d%s)(\n                timestamp,\n                %s\n            )", defaultWindowSeconds, modeArgs, strings.Join(stepMatchAliases, ",\n                "))
 
-	// 3. Build WHERE clause
-	whereStmt := "project_id = ? AND environment = ?"
-	args = append(args, req.ProjectID, req.Environment)
+	// 3. Build WHERE clause for the innermost (raw events) query
+	baseWhere := "project_id = ? AND environment = ?"
+	var baseArgs []any
+	baseArgs = append(baseArgs, req.ProjectID, req.Environment)
 
 	if !req.GlobalDateRange.Start.IsZero() && !req.GlobalDateRange.End.IsZero() {
-		// Convert to UTC for ClickHouse comparison
-		whereStmt += " AND timestamp >= ? AND timestamp <= ?"
-		args = append(args, req.GlobalDateRange.Start.UTC(), req.GlobalDateRange.End.UTC())
+		baseWhere += " AND timestamp >= ? AND timestamp <= ?"
+		baseArgs = append(baseArgs, req.GlobalDateRange.Start.UTC(), req.GlobalDateRange.End.UTC())
 	}
 
 	if len(req.GlobalFilters) > 0 {
 		globalFilterStmt, globalFilterArgs := buildFilterConds(req.GlobalFilters)
 		if globalFilterStmt != "" {
-			whereStmt += " AND " + globalFilterStmt
-			args = append(args, globalFilterArgs...)
+			baseWhere += " AND " + globalFilterStmt
+			baseArgs = append(baseArgs, globalFilterArgs...)
 		}
 	}
 
-	// 4. Build GROUP BY for innermost query
+	// Inner Query: Extract raw events and calculate booleans once per row
+	// This avoids doubling placeholders in the final query
+	rawSelects := []string{"distinct_id", "timestamp"}
+	if len(breakdownSelects) > 0 {
+		rawSelects = append(rawSelects, breakdownSelects...)
+	}
+	rawSelects = append(rawSelects, stepMatchExprs...)
+	for _, hc := range req.HoldConstants {
+		rawSelects = append(rawSelects, extractProp(hc))
+	}
+
+	rawArgs := append(stepFilterArgs, baseArgs...)
+
+	rawEventsQuery := fmt.Sprintf(`SELECT 
+            %s
+        FROM events
+        WHERE %s`, strings.Join(rawSelects, ",\n            "), baseWhere)
+
+	// 4. Build GROUP BY for aggregate query
 	groupBys := make([]string, 0)
 	if len(breakdownAliases) > 0 {
 		groupBys = append(groupBys, breakdownAliases...)
@@ -129,23 +153,26 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		groupBys = append(groupBys, extractProp(hc))
 	}
 
-	// Innermost select
+	// Innermost aggregate select
 	innerSelects := make([]string, 0)
-	if len(breakdownSelects) > 0 {
-		innerSelects = append(innerSelects, breakdownSelects...)
+	if len(breakdownAliases) > 0 {
+		innerSelects = append(innerSelects, breakdownAliases...)
 	}
 	innerSelects = append(innerSelects, "distinct_id")
 	innerSelects = append(innerSelects, windowFunnelCall+" AS level")
 
-	for i, cond := range conditions {
-		innerSelects = append(innerSelects, fmt.Sprintf("minIf(timestamp, %s) AS step_%d_time", cond, i+1))
+	for i, alias := range stepMatchAliases {
+		innerSelects = append(innerSelects, fmt.Sprintf("minIf(timestamp, %s) AS step_%d_time", alias, i+1))
 	}
 
 	innerQuery := fmt.Sprintf(`SELECT 
             %s
-        FROM events
-        WHERE %s
-        GROUP BY %s`, strings.Join(innerSelects, ",\n            "), whereStmt, strings.Join(groupBys, ", "))
+        FROM (
+            %s
+        )
+        GROUP BY %s`, strings.Join(innerSelects, ",\n            "), rawEventsQuery, strings.Join(groupBys, ", "))
+
+	args = rawArgs
 
 	// Middle query (handles MAX(level) when there are hold constants)
 	midSelects := make([]string, 0)
@@ -155,7 +182,7 @@ func BuildWindowFunnelQuery(req models.FunnelRequest, defaultWindowSeconds int) 
 		midGroupBys = append(midGroupBys, breakdownAliases...)
 	}
 	midSelects = append(midSelects, "distinct_id", "MAX(level) as level")
-	for i := range conditions {
+	for i := range stepMatchAliases {
 		midSelects = append(midSelects, fmt.Sprintf("min(step_%d_time) as step_%d_time", i+1, i+1))
 	}
 	midGroupBys = append(midGroupBys, "distinct_id")
@@ -196,7 +223,7 @@ ORDER BY %s`, strings.Join(outerSelects, ",\n    "), midQuery, strings.Join(oute
 	// Build times array: [0, step2-step1, step3-step2...]
 	var timeDiffs []string
 	timeDiffs = append(timeDiffs, "0")
-	for i := 1; i < len(conditions); i++ {
+	for i := 1; i < len(stepMatchAliases); i++ {
 		timeDiffs = append(timeDiffs, fmt.Sprintf("dateDiff('second', step_%d_time, step_%d_time)", i, i+1))
 	}
 	timesArrayStr := fmt.Sprintf("[%s] AS times_array", strings.Join(timeDiffs, ", "))

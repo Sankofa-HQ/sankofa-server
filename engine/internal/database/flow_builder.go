@@ -428,8 +428,9 @@ func buildLegacyFlowQuery(req models.FlowRequest) (string, []any) {
 	}
 
 	if propertyBreakdown != "" {
-		eventNameProj = `if(event_name == ?, event_name || ' (' || coalesce(nullIf(JSONExtractString(properties, ?), ''), 'Other') || ')', event_name)`
-		finalArgs = append(finalArgs, req.StartEvent, propertyBreakdown)
+		propExtract := BuildPropertyExtractionSQL(propertyBreakdown)
+		eventNameProj = fmt.Sprintf(`if(event_name == ?, event_name || ' (' || coalesce(nullIf(%s, ''), 'Other') || ')', event_name)`, propExtract)
+		finalArgs = append(finalArgs, req.StartEvent)
 	}
 
 	finalArgs = append(finalArgs, whereArgs...)
