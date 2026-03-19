@@ -313,7 +313,7 @@ func main() {
 			strings.HasPrefix(path, "/api/v1/track") ||
 			strings.HasPrefix(path, "/api/v1/people") ||
 			strings.HasPrefix(path, "/api/v1/alias") ||
-			strings.HasPrefix(path, "/api/v1/replay/shared") ||
+			strings.HasPrefix(path, "/api/v1/shared-replay") ||
 			strings.HasPrefix(path, "/api/replay") ||
 			strings.HasPrefix(path, "/api/ee/replay") {
 			return c.Next()
