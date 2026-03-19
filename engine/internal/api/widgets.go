@@ -322,11 +322,13 @@ func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 
 	type TopEvent struct {
 		EventName   string `json:"event_name"`
+		DisplayName string `json:"display_name"`
 		TotalVolume uint64 `json:"total_volume"`
 		UniqueUsers uint64 `json:"unique_users"`
 	}
 	var events []TopEvent
 
+	// 1. Fetch from ClickHouse
 	for rows.Next() {
 		var eventName string
 		var totalVolume uint64
@@ -336,9 +338,34 @@ func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 		}
 		events = append(events, TopEvent{
 			EventName:   eventName,
+			DisplayName: eventName, // Default to raw name
 			TotalVolume: totalVolume,
 			UniqueUsers: uniqueUsers,
 		})
+	}
+
+	// 2. Enrich with Lexicon Display Names from SQL
+	if len(events) > 0 {
+		var names []string
+		for _, e := range events {
+			names = append(names, e.EventName)
+		}
+
+		var lexiconEntries []database.LexiconEvent
+		err := h.DB.Where("project_id = ? AND environment = ? AND name IN ?", project.ID, environment, names).Find(&lexiconEntries).Error
+		if err == nil && len(lexiconEntries) > 0 {
+			nameMap := make(map[string]string)
+			for _, entry := range lexiconEntries {
+				if entry.DisplayName != "" {
+					nameMap[entry.Name] = entry.DisplayName
+				}
+			}
+			for i := range events {
+				if disp, ok := nameMap[events[i].EventName]; ok {
+					events[i].DisplayName = disp
+				}
+			}
+		}
 	}
 
 	return c.JSON(fiber.Map{"events": events})
