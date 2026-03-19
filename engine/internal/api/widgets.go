@@ -485,9 +485,7 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			if(mapContains(default_properties, '$browser'), default_properties['$browser'],
-			   if(mapContains(properties, '$browser'), properties['$browser'], 'Unknown')
-			) as browser,
+			if(browser != '', browser, 'Unknown') as browser,
 			uniqExact(distinct_id) as value
 		FROM events
 		WHERE project_id = ? 

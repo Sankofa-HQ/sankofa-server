@@ -112,6 +112,7 @@ type AnalyticsEvent struct {
 	Region            string            `json:"-"`
 	Country           string            `json:"-"`
 	OS                string            `json:"-"`
+	Browser           string            `json:"-"`
 	DeviceModel       string            `json:"-"`
 	Properties        map[string]string `json:"properties"`
 	DefaultProperties map[string]string `json:"default_properties"`
@@ -528,7 +529,7 @@ func startAliasWorker(ctx context.Context, conn driver.Conn, stream <-chan Perso
 
 func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 	ctx := context.Background()
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (id, tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, session_id, city, region, country, os, device_model, properties, default_properties, lib_version)")
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO events (id, tenant_id, project_id, organization_id, environment, timestamp, event_name, distinct_id, session_id, city, region, country, os, browser, device_model, properties, default_properties, lib_version)")
 	if err != nil {
 		log.Println("❌ Batch Prep Error:", err)
 		return
@@ -554,6 +555,7 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 			e.Region,
 			e.Country,
 			e.OS,
+			e.Browser,
 			e.DeviceModel,
 			e.Properties,
 			e.DefaultProperties,
@@ -599,6 +601,7 @@ func initClickHouseSchema(conn driver.Conn) {
 		region String,
 		country String,
 		os String,
+		browser String,
 		device_model String,
 		properties Map(String, String),
 		default_properties Map(String, String),
@@ -628,13 +631,16 @@ func initClickHouseSchema(conn driver.Conn) {
 	}
 
 	// MIGRATION: Add columns if they don't exist (Idempotent)
-	cols := []string{"id", "project_id", "organization_id", "environment"}
-	tables := []string{"events", "persons"}
-
-	for _, table := range tables {
-		for _, col := range cols {
+	sharedCols := []string{"id", "project_id", "organization_id", "environment"}
+	for _, table := range []string{"events", "persons"} {
+		for _, col := range sharedCols {
 			_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s String", table, col))
 		}
+	}
+	// Event-specific columns
+	eventCols := []string{"os", "browser", "device_model"}
+	for _, col := range eventCols {
+		_ = conn.Exec(ctx, fmt.Sprintf("ALTER TABLE events ADD COLUMN IF NOT EXISTS %s String", col))
 	}
 
 	// MIGRATION: Add promoted columns to events if they don't exist
@@ -660,8 +666,8 @@ func initClickHouseSchema(conn driver.Conn) {
 	}
 
 	// MIGRATION: Add columns if they don't exist (Idempotent)
-	cols = []string{"project_id", "organization_id", "environment"}
-	tables = []string{"events", "persons", "person_aliases"}
+	cols := []string{"project_id", "organization_id", "environment"}
+	tables := []string{"events", "persons", "person_aliases"}
 
 	for _, table := range tables {
 		for _, col := range cols {

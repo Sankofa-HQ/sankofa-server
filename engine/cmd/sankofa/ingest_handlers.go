@@ -10,10 +10,17 @@ import (
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/utils"
 
+	"github.com/ua-parser/uap-go/uaparser"
 	"github.com/gofiber/fiber/v2"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"gorm.io/gorm"
 )
+
+var uaParser *uaparser.Parser
+
+func init() {
+	uaParser = uaparser.NewFromSaved()
+}
 
 type analyticsBatchRequest struct {
 	Operations []analyticsBatchOperation `json:"operations"`
@@ -36,7 +43,7 @@ func newTrackIngestHandler(db *gorm.DB, eventStream chan<- AnalyticsEvent) fiber
 			return c.SendStatus(fiber.StatusBadRequest)
 		}
 
-		finalizeAnalyticsEvent(&event, project, environment, normalizedClientIP(c.IP()))
+		finalizeAnalyticsEvent(&event, project, environment, normalizedClientIP(c.IP()), c.Get("User-Agent"))
 		if err := enqueueAnalyticsEvent(eventStream, event); err != nil {
 			return err
 		}
@@ -57,7 +64,7 @@ func newPeopleIngestHandler(db *gorm.DB, personStream chan<- PersonProfile) fibe
 			return c.SendStatus(fiber.StatusBadRequest)
 		}
 
-		finalizePersonProfile(&person, project, environment, normalizedClientIP(c.IP()))
+		finalizePersonProfile(&person, project, environment, normalizedClientIP(c.IP()), c.Get("User-Agent"))
 		if err := enqueuePersonProfile(personStream, person); err != nil {
 			return err
 		}
@@ -120,14 +127,14 @@ func newBatchIngestHandler(
 				if err := json.Unmarshal(operation.Payload, &event); err != nil {
 					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid track payload"})
 				}
-				finalizeAnalyticsEvent(&event, project, environment, clientIP)
+				finalizeAnalyticsEvent(&event, project, environment, clientIP, c.Get("User-Agent"))
 				events = append(events, event)
 			case "people":
 				var person PersonProfile
 				if err := json.Unmarshal(operation.Payload, &person); err != nil {
 					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid people payload"})
 				}
-				finalizePersonProfile(&person, project, environment, clientIP)
+				finalizePersonProfile(&person, project, environment, clientIP, c.Get("User-Agent"))
 				people = append(people, person)
 			case "alias":
 				var alias PersonAlias
@@ -223,7 +230,7 @@ func resolveProjectForAPIKey(db *gorm.DB, apiKey string, origin string, clientIP
 	return project, environment, nil
 }
 
-func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, environment string, clientIP string) {
+func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, environment string, clientIP string, userAgent string) {
 	nanoID, _ := gonanoid.New(21)
 	event.ID = "evt_" + nanoID
 	event.TenantID = fmt.Sprint(project.ID)
@@ -240,6 +247,7 @@ func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, env
 	}
 
 	enrichWithGeoIP(clientIP, event.DefaultProperties)
+	enrichWithUserAgent(userAgent, event)
 
 	if sessionID, ok := event.Properties["$session_id"]; ok {
 		event.SessionID = sessionID
@@ -254,12 +262,7 @@ func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, env
 	if country, ok := event.DefaultProperties["$country"]; ok {
 		event.Country = country
 	}
-	if os, ok := event.DefaultProperties["$os"]; ok {
-		event.OS = os
-	}
-	if model, ok := event.DefaultProperties["$device_model"]; ok {
-		event.DeviceModel = model
-	}
+	// Note: OS, Browser, DeviceModel are set by enrichWithUserAgent
 	if database.Store != nil {
 		props := make(map[string]interface{}, len(event.Properties))
 		for key, value := range event.Properties {
@@ -269,7 +272,7 @@ func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, env
 	}
 }
 
-func finalizePersonProfile(profile *PersonProfile, project database.Project, environment string, clientIP string) {
+func finalizePersonProfile(profile *PersonProfile, project database.Project, environment string, clientIP string, userAgent string) {
 	profile.TenantID = fmt.Sprint(project.ID)
 	profile.ProjectID = fmt.Sprint(project.ID)
 	profile.OrganizationID = fmt.Sprint(project.OrganizationID)
@@ -281,6 +284,12 @@ func finalizePersonProfile(profile *PersonProfile, project database.Project, env
 	}
 
 	enrichWithGeoIP(clientIP, profile.Properties)
+
+	if client := uaParser.Parse(userAgent); client != nil {
+		profile.Properties["$os"] = client.Os.Family
+		profile.Properties["$browser"] = client.UserAgent.Family
+		profile.Properties["$device_model"] = client.Device.Family
+	}
 }
 
 func finalizePersonAlias(alias *PersonAlias, project database.Project, environment string) {
@@ -289,6 +298,27 @@ func finalizePersonAlias(alias *PersonAlias, project database.Project, environme
 	alias.OrganizationID = fmt.Sprint(project.OrganizationID)
 	alias.Environment = environment
 	alias.Timestamp = time.Now()
+}
+
+func enrichWithUserAgent(userAgent string, event *AnalyticsEvent) {
+	client := uaParser.Parse(userAgent)
+	if client == nil {
+		return
+	}
+
+	event.OS = client.Os.Family
+	event.Browser = client.UserAgent.Family
+	event.DeviceModel = client.Device.Family
+
+	if event.OS != "" {
+		event.DefaultProperties["$os"] = event.OS
+	}
+	if event.Browser != "" {
+		event.DefaultProperties["$browser"] = event.Browser
+	}
+	if event.DeviceModel != "" {
+		event.DefaultProperties["$device_model"] = event.DeviceModel
+	}
 }
 
 func enrichWithGeoIP(clientIP string, properties map[string]string) {
