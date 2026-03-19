@@ -78,7 +78,10 @@ func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
 	project, ok := c.Locals("project").(database.Project)
 	if !ok {
 		// Fallback to manual check if middleware wasn't used
-		userID := c.Locals("user_id").(string)
+		userID, okU := c.Locals("user_id").(string)
+		if !okU || userID == "" {
+			return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+		}
 		var err error
 		p, err := getProjectFromContext(c, h.DB, userID)
 		if err != nil || p == nil {
@@ -126,7 +129,10 @@ func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
 // GetKPISummary returns 4 aggregated metrics for the top KPI widget row
 // (Active Users, Total Events, Avg Session Time, New Users) for the selected period
 func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -220,7 +226,10 @@ func (h *WidgetsHandler) GetKPISummary(c *fiber.Ctx) error {
 
 // GetActiveVisitorsSeries returns time-series data of DAU for the selected period
 func (h *WidgetsHandler) GetActiveVisitorsSeries(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -275,7 +284,10 @@ func (h *WidgetsHandler) GetActiveVisitorsSeries(c *fiber.Ctx) error {
 
 // GetTopEvents returns the top 10 most frequent custom events for the selected period
 func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -334,7 +346,10 @@ func (h *WidgetsHandler) GetTopEvents(c *fiber.Ctx) error {
 
 // GetGeographicBreakdown returns the top 5 countries by event volume for the selected period
 func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -393,7 +408,10 @@ func (h *WidgetsHandler) GetGeographicBreakdown(c *fiber.Ctx) error {
 
 // GetDeviceBreakdown returns the top OS usage breakdown for the selected period
 func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -451,7 +469,10 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 
 // GetBrowserBreakdown returns the top browser breakdown for the selected period
 func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -511,7 +532,10 @@ func (h *WidgetsHandler) GetBrowserBreakdown(c *fiber.Ctx) error {
 
 // GetPlatformBreakdown returns the SDK lib/platform breakdown for the selected period
 func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -571,7 +595,10 @@ func (h *WidgetsHandler) GetPlatformBreakdown(c *fiber.Ctx) error {
 
 // GetTopUsers returns the top 5 most active distinct_ids for the selected period
 func (h *WidgetsHandler) GetTopUsers(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err

@@ -143,6 +143,10 @@ func (m *AuthMiddleware) RequireProjectAccess(minRole string) fiber.Handler {
 			projectID, _ = c.Locals("project_id").(string)
 		}
 		if projectID == "" {
+			// Also check query (useful for some GET requests)
+			projectID = c.Query("project_id")
+		}
+		if projectID == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "Missing project ID (header 'x-project-id' or path param 'project_id' required)"})
 		}
 

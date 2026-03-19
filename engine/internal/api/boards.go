@@ -145,7 +145,10 @@ func (h *BoardsHandler) getBoardPermissionLevel(userID string, board *database.B
 }
 
 func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil || project == nil {
 		return err
@@ -278,7 +281,10 @@ func (h *BoardsHandler) ListBoards(c *fiber.Ctx) error {
 }
 
 func (h *BoardsHandler) GetBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -317,7 +323,10 @@ func (h *BoardsHandler) GetBoard(c *fiber.Ctx) error {
 
 // PinBoard sets a specific board as the user's default pinned board for the current project
 func (h *BoardsHandler) PinBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -356,7 +365,10 @@ func (h *BoardsHandler) PinBoard(c *fiber.Ctx) error {
 
 // CreateBoard handles the creation of a new custom dashboard
 func (h *BoardsHandler) CreateBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -405,7 +417,10 @@ func (h *BoardsHandler) CreateBoard(c *fiber.Ctx) error {
 
 // UpdateBoard handles renaming/updating a board's details
 func (h *BoardsHandler) UpdateBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -465,7 +480,10 @@ func (h *BoardsHandler) UpdateBoard(c *fiber.Ctx) error {
 
 // DeleteBoard permanently removes a custom board
 func (h *BoardsHandler) DeleteBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -513,7 +531,10 @@ func (h *BoardsHandler) DeleteBoard(c *fiber.Ctx) error {
 
 // DuplicateBoard creates a copy of a board with all its widgets
 func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -647,7 +668,10 @@ func (h *BoardsHandler) DuplicateBoard(c *fiber.Ctx) error {
 
 // ShareBoard shares a board with a user, team, or entire project
 func (h *BoardsHandler) ShareBoard(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -726,7 +750,10 @@ func (h *BoardsHandler) ShareBoard(c *fiber.Ctx) error {
 
 // ListShares returns all shares for a board
 func (h *BoardsHandler) ListShares(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -779,7 +806,10 @@ func (h *BoardsHandler) ListShares(c *fiber.Ctx) error {
 
 // RevokeShare removes a specific share
 func (h *BoardsHandler) RevokeShare(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -807,7 +837,10 @@ func (h *BoardsHandler) RevokeShare(c *fiber.Ctx) error {
 
 // ListSharedBoards returns boards that others have shared with the current user
 func (h *BoardsHandler) ListSharedBoards(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -910,7 +943,10 @@ func (h *BoardsHandler) ListSharedBoards(c *fiber.Ctx) error {
 
 // GetBoardPermission returns the current user's permission level for a board
 func (h *BoardsHandler) GetBoardPermission(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -939,7 +975,10 @@ func (h *BoardsHandler) GetBoardPermission(c *fiber.Ctx) error {
 
 // UpdateBoardLayout handles saving the react-grid-layout JSON array
 func (h *BoardsHandler) UpdateBoardLayout(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -991,7 +1030,10 @@ func (h *BoardsHandler) UpdateBoardLayout(c *fiber.Ctx) error {
 
 // AddBoardWidget adds a new widget to a board referencing an external query (Saved Funnel, etc)
 func (h *BoardsHandler) AddBoardWidget(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err
@@ -1046,7 +1088,10 @@ func (h *BoardsHandler) AddBoardWidget(c *fiber.Ctx) error {
 
 // DeleteBoardWidget removes a widget by its ID
 func (h *BoardsHandler) DeleteBoardWidget(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	project, err := getProjectFromContext(c, h.DB, userID)
 	if err != nil {
 		return err

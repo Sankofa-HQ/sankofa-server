@@ -264,7 +264,10 @@ func BuildCohortSQL(db *gorm.DB, projectID string, env string, ast CohortAST) (s
 // --- HANDLERS ---
 
 func (h *CohortsHandler) CreateCohort(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 	var req struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
