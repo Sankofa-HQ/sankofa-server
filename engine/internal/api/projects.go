@@ -165,6 +165,7 @@ func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
 	type CreateProjectReq struct {
 		Name           string `json:"name"`
 		OrganizationID string `json:"org_id"`
+		Timezone       string `json:"timezone"`
 	}
 	var req CreateProjectReq
 	if err := c.BodyParser(&req); err != nil {
@@ -180,12 +181,17 @@ func (h *ProjectHandler) CreateProject(c *fiber.Ctx) error {
 	apiKey, _ := generateAPIKey()
 	testApiKey, _ := generateTestAPIKey() // Assuming helper or just use random for now
 
+	tz := req.Timezone
+	if tz == "" {
+		tz = "UTC"
+	}
+
 	project := database.Project{
 		OrganizationID: req.OrganizationID,
 		Name:           req.Name,
 		APIKey:         apiKey,
 		TestAPIKey:     testApiKey,
-		Timezone:       "UTC", // Default
+		Timezone:       tz,
 		Region:         "eu-central-1",
 		CreatedByID:    userID,
 		Environment:    "test",

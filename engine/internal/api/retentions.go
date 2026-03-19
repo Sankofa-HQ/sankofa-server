@@ -23,9 +23,8 @@ func NewRetentionsHandler(db *gorm.DB, chConn driver.Conn, eventsHandler *Events
 	return &RetentionsHandler{db: db, chConn: chConn, eventsHandler: eventsHandler}
 }
 
-func (h *RetentionsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	retentions := router.Group("/projects/:project_id/retentions")
-	retentions.Use(authMiddleware)
+func (h *RetentionsHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
+	retentions := router.Group("/projects/:project_id/retentions", middlewares...)
 	retentions.Post("/", h.CalculateRetention)
 	retentions.Post("/users", h.RetentionUsers)
 	retentions.Post("/saved", h.CreateSavedRetention)
@@ -363,19 +362,14 @@ type SaveRetentionRequest struct {
 }
 
 func (h *RetentionsHandler) CreateSavedRetention(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	userID, _ := c.Locals("user_id").(string)
 
 	projectID := c.Params("project_id")
 	var project database.Project
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var req SaveRetentionRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -405,19 +399,14 @@ func (h *RetentionsHandler) CreateSavedRetention(c *fiber.Ctx) error {
 }
 
 func (h *RetentionsHandler) ListSavedRetentions(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	var project database.Project
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var retentions []database.SavedRetention
 	query := h.db.Where("project_id = ?", projectID)

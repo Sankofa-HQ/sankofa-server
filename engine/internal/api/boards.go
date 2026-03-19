@@ -21,8 +21,8 @@ func NewBoardsHandler(db *gorm.DB, ch driver.Conn) *BoardsHandler {
 	return &BoardsHandler{DB: db, CH: ch}
 }
 
-func (h *BoardsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	boards := router.Group("/boards", authMiddleware)
+func (h *BoardsHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
+	boards := router.Group("/boards", middlewares...)
 
 	boards.Get("/", h.ListBoards)
 	boards.Post("/", h.CreateBoard)

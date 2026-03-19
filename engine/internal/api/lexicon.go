@@ -25,8 +25,8 @@ func NewLexiconHandler(db *gorm.DB, ch driver.Conn) *LexiconHandler {
 	return &LexiconHandler{DB: db, CH: ch}
 }
 
-func (h *LexiconHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	lexicon := router.Group("/lexicon", authMiddleware)
+func (h *LexiconHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
+	lexicon := router.Group("/lexicon", middlewares...)
 
 	// Summary (notification badge counts)
 	lexicon.Get("/summary", h.LexiconSummary)

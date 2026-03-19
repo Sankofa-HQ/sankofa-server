@@ -22,9 +22,8 @@ func NewInsightsHandler(db *gorm.DB, chConn driver.Conn, eventsHandler *EventsHa
 	return &InsightsHandler{db: db, chConn: chConn, eventsHandler: eventsHandler}
 }
 
-func (h *InsightsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	insights := router.Group("/projects/:project_id/insights")
-	insights.Use(authMiddleware)
+func (h *InsightsHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
+	insights := router.Group("/projects/:project_id/insights", middlewares...)
 	insights.Post("/", h.QueryInsight)
 	insights.Post("/saved", h.CreateSavedInsight)
 	insights.Get("/saved", h.ListSavedInsights)
@@ -163,7 +162,7 @@ type SaveInsightRequest struct {
 func (h *InsightsHandler) CreateSavedInsight(c *fiber.Ctx) error {
 	userID, ok := c.Locals("user_id").(string)
 	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+		// This should be handled by RequireAuth, but keeping it for safety in case userID is used below
 	}
 
 	projectID := c.Params("project_id")
@@ -175,9 +174,7 @@ func (h *InsightsHandler) CreateSavedInsight(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var req SaveInsightRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -215,10 +212,7 @@ func (h *InsightsHandler) CreateSavedInsight(c *fiber.Ctx) error {
 }
 
 func (h *InsightsHandler) ListSavedInsights(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	if projectID == "" {
@@ -229,9 +223,7 @@ func (h *InsightsHandler) ListSavedInsights(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var insights []database.SavedInsight
 	query := h.db.Where("project_id = ?", projectID)
@@ -249,10 +241,7 @@ func (h *InsightsHandler) ListSavedInsights(c *fiber.Ctx) error {
 }
 
 func (h *InsightsHandler) GetSavedInsight(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	insightID := c.Params("id")
@@ -261,9 +250,7 @@ func (h *InsightsHandler) GetSavedInsight(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var insight database.SavedInsight
 	query := h.db.Where("id = ? AND project_id = ?", insightID, projectID)
@@ -281,10 +268,7 @@ func (h *InsightsHandler) GetSavedInsight(c *fiber.Ctx) error {
 }
 
 func (h *InsightsHandler) UpdateSavedInsight(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	insightID := c.Params("id")
@@ -293,9 +277,7 @@ func (h *InsightsHandler) UpdateSavedInsight(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var insight database.SavedInsight
 	query := h.db.Where("id = ? AND project_id = ?", insightID, projectID)
@@ -344,10 +326,7 @@ func (h *InsightsHandler) UpdateSavedInsight(c *fiber.Ctx) error {
 }
 
 func (h *InsightsHandler) DeleteSavedInsight(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	insightID := c.Params("id")
@@ -356,9 +335,7 @@ func (h *InsightsHandler) DeleteSavedInsight(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	query := h.db.Where("id = ? AND project_id = ?", insightID, projectID)
 

@@ -23,10 +23,9 @@ func NewFunnelsHandler(db *gorm.DB, chConn driver.Conn, eventsHandler *EventsHan
 	return &FunnelsHandler{db: db, chConn: chConn, eventsHandler: eventsHandler}
 }
 
-func (h *FunnelsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
+func (h *FunnelsHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
 	// POST /api/v1/projects/:project_id/funnels
-	funnels := router.Group("/projects/:project_id/funnels")
-	funnels.Use(authMiddleware)
+	funnels := router.Group("/projects/:project_id/funnels", middlewares...)
 	funnels.Post("/", h.CalculateFunnel)
 	funnels.Post("/users", h.FunnelUsers)
 	funnels.Post("/saved", h.CreateSavedFunnel)
@@ -410,10 +409,8 @@ type SaveFunnelRequest struct {
 }
 
 func (h *FunnelsHandler) CreateSavedFunnel(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now retrieved from context by middleware if needed
+	userID, _ := c.Locals("user_id").(string)
 
 	projectID := c.Params("project_id")
 	if projectID == "" {
@@ -424,9 +421,7 @@ func (h *FunnelsHandler) CreateSavedFunnel(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var req SaveFunnelRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -464,10 +459,7 @@ func (h *FunnelsHandler) CreateSavedFunnel(c *fiber.Ctx) error {
 }
 
 func (h *FunnelsHandler) ListSavedFunnels(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	if projectID == "" {
@@ -478,9 +470,7 @@ func (h *FunnelsHandler) ListSavedFunnels(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var funnels []database.SavedFunnel
 	query := h.db.Where("project_id = ?", projectID)
@@ -498,10 +488,7 @@ func (h *FunnelsHandler) ListSavedFunnels(c *fiber.Ctx) error {
 }
 
 func (h *FunnelsHandler) GetSavedFunnel(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	funnelID := c.Params("id")
@@ -510,9 +497,7 @@ func (h *FunnelsHandler) GetSavedFunnel(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var funnel database.SavedFunnel
 	query := h.db.Where("id = ? AND project_id = ?", funnelID, projectID)
@@ -530,10 +515,7 @@ func (h *FunnelsHandler) GetSavedFunnel(c *fiber.Ctx) error {
 }
 
 func (h *FunnelsHandler) UpdateSavedFunnel(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	funnelID := c.Params("id")
@@ -542,9 +524,7 @@ func (h *FunnelsHandler) UpdateSavedFunnel(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	var funnel database.SavedFunnel
 	query := h.db.Where("id = ? AND project_id = ?", funnelID, projectID)
@@ -593,10 +573,7 @@ func (h *FunnelsHandler) UpdateSavedFunnel(c *fiber.Ctx) error {
 }
 
 func (h *FunnelsHandler) DeleteSavedFunnel(c *fiber.Ctx) error {
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	// userID is now handled by middleware check
 
 	projectID := c.Params("project_id")
 	funnelID := c.Params("id")
@@ -605,9 +582,7 @@ func (h *FunnelsHandler) DeleteSavedFunnel(c *fiber.Ctx) error {
 	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 	}
-	if !checkProjectAccess(h.db, &project, userID) {
-		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
-	}
+	// --- checkProjectAccess is now handled by middleware ---
 
 	query := h.db.Where("id = ? AND project_id = ?", funnelID, projectID)
 	env := c.Query("environment")

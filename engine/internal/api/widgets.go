@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"sankofa/engine/internal/database"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -19,8 +20,8 @@ func NewWidgetsHandler(db *gorm.DB, ch driver.Conn) *WidgetsHandler {
 	return &WidgetsHandler{DB: db, CH: ch}
 }
 
-func (h *WidgetsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	w := router.Group("/widgets", authMiddleware)
+func (h *WidgetsHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
+	w := router.Group("/widgets", middlewares...)
 	w.Get("/kpi-summary", h.GetKPISummary)
 	w.Get("/active-visitors", h.GetActiveVisitorsSeries)
 	w.Get("/top-events", h.GetTopEvents)
@@ -73,10 +74,17 @@ func getWidgetDateRange(c *fiber.Ctx) (string, string, string) {
 }
 
 func (h *WidgetsHandler) GetActiveUsersToday(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(string)
-	project, err := getProjectFromContext(c, h.DB, userID)
-	if err != nil || project == nil {
-		return err
+	// Extract project from context (populated by middleware)
+	project, ok := c.Locals("project").(database.Project)
+	if !ok {
+		// Fallback to manual check if middleware wasn't used
+		userID := c.Locals("user_id").(string)
+		var err error
+		p, err := getProjectFromContext(c, h.DB, userID)
+		if err != nil || p == nil {
+			return err
+		}
+		project = *p
 	}
 
 	environment := c.Query("environment", "live")
@@ -424,16 +432,16 @@ func (h *WidgetsHandler) GetDeviceBreakdown(c *fiber.Ctx) error {
 	var data []BreakdownPoint
 
 	for rows.Next() {
-		var os string
+		var osName string
 		var value uint64
-		if err := rows.Scan(&os, &value); err != nil {
+		if err := rows.Scan(&osName, &value); err != nil {
 			continue
 		}
-		if os == "" {
-			os = "Unknown"
+		if osName == "" {
+			osName = "Unknown"
 		}
 		data = append(data, BreakdownPoint{
-			Label: os,
+			Label: osName,
 			Value: value,
 		})
 	}

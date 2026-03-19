@@ -262,14 +262,14 @@ func main() {
 	dashboardCORS := cors.New(cors.Config{
 		AllowOrigins:     CORS_ALLOWED_ORIGINS,
 		AllowCredentials: true,
-		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, authorization, x-api-key, x-project-id, x-org-id, X-Requested-With",
+		AllowMethods:     "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+		AllowHeaders:     "*",
 	})
 
 	ingestCORS := cors.New(cors.Config{
 		AllowOrigins: "*",             // Permissive for data collection preflights; strictly validated in handlers via Dashboard settings
-		AllowMethods: "POST, OPTIONS", // No GET needed for standard ingestion
-		AllowHeaders: "Origin, Content-Type, Accept, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
+		AllowMethods: "GET, POST, OPTIONS", // No GET needed for standard ingestion
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, authorization, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	})
 
 	// INGESTION RATE LIMITER (Protecting endpoints from flooding)
@@ -304,11 +304,9 @@ func main() {
 	ingestV1.Post("/alias", newAliasIngestHandler(db, aliasStream))
 
 	// 2. RESTRICTIVE DASHBOARD API
-	apiRouter := app.Group("/api", func(c *fiber.Ctx) error {
+	apiRouter := app.Group("/api")
+	apiRouter.Use(func(c *fiber.Ctx) error {
 		// INGESTION EXEMPTION: Skip restrictive CORS for ingestion routes
-		// Since these routes use a prefix that already starts with /api (like /api/v1/batch
-		// or /api/replay), we must bypass the Dashboard CORS here so they can use
-		// their own permissive ingestion CORS further down the stack.
 		path := c.Path()
 		if strings.HasPrefix(path, "/api/v1/batch") ||
 			strings.HasPrefix(path, "/api/v1/track") ||
@@ -354,12 +352,12 @@ func main() {
 	lexiconHandler.RegisterRoutes(v1, middleware.RequireAuth) // Lexicon under /api/v1/lexicon
 
 	// Analysis routes: Read= Viewer+, Write=Editor+
-	funnelsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
-	flowsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
-	insightsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
-	retentionsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
-	boardsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
-	widgetsHandler.RegisterRoutes(v1, middleware.RequireProjectAccess("Viewer"))
+	funnelsHandler.RegisterRoutes(v1, middleware.RequireAuth, middleware.RequireProjectAccess("Viewer"))
+	flowsHandler.RegisterRoutes(v1, middleware.RequireAuth, middleware.RequireProjectAccess("Viewer"))
+	insightsHandler.RegisterRoutes(v1, middleware.RequireAuth, middleware.RequireProjectAccess("Viewer"))
+	retentionsHandler.RegisterRoutes(v1, middleware.RequireAuth, middleware.RequireProjectAccess("Viewer"))
+	boardsHandler.RegisterRoutes(v1, middleware.RequireAuth, middleware.RequireProjectAccess("Viewer"))
+	widgetsHandler.RegisterRoutes(v1, middleware.RequireAuth, middleware.RequireProjectAccess("Viewer"))
 	v1.Get("/people/properties/keys", middleware.RequireAuth, peopleHandler.GetPropertyKeys)
 	v1.Get("/people/properties/values", middleware.RequireAuth, peopleHandler.GetPropertyValues)
 	v1.Get("/people", middleware.RequireAuth, peopleHandler.ListPeople)

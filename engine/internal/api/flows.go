@@ -25,9 +25,8 @@ func NewFlowsHandler(db *gorm.DB, chConn driver.Conn, eventsHandler *EventsHandl
 	}
 }
 
-func (h *FlowsHandler) RegisterRoutes(router fiber.Router, authMiddleware fiber.Handler) {
-	flows := router.Group("/projects/:project_id/flows")
-	flows.Use(authMiddleware)
+func (h *FlowsHandler) RegisterRoutes(router fiber.Router, middlewares ...fiber.Handler) {
+	flows := router.Group("/projects/:project_id/flows", middlewares...)
 
 	flows.Post("/calculate", h.CalculateFlow)
 	flows.Post("/users", h.FlowUsers)
@@ -312,10 +311,7 @@ type SaveFlowRequest struct {
 
 func (h *FlowsHandler) CreateSavedFlow(c *fiber.Ctx) error {
 	projectID := c.Params("project_id")
-	userID, ok := c.Locals("user_id").(string)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
-	}
+	userID, _ := c.Locals("user_id").(string)
 
 	var req SaveFlowRequest
 	if err := c.BodyParser(&req); err != nil {
