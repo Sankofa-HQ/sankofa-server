@@ -268,7 +268,7 @@ func main() {
 
 	ingestCORS := cors.New(cors.Config{
 		AllowOrigins: "*",             // Permissive for data collection preflights; strictly validated in handlers via Dashboard settings
-		AllowMethods: "GET, POST, OPTIONS", // No GET needed for standard ingestion
+		AllowMethods: "GET, POST, PUT, DELETE, PATCH, OPTIONS", // Permissive for both ingestion and dashboard/lexicon since they share the same prefix
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization, authorization, x-api-key, x-project-id, x-org-id, X-Session-Id, X-Chunk-Index, X-Distinct-Id, X-Replay-Mode",
 	})
 
