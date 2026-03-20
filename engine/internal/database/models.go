@@ -18,6 +18,7 @@ type User struct {
 	CurrentProjectID   *string   `json:"current_project_id" gorm:"type:varchar(32)"` // Nullable
 	CurrentProject     *Project  `json:"current_project" gorm:"foreignKey:CurrentProjectID"`
 	EmailVerified      bool      `json:"email_verified" gorm:"default:false"`
+	IsSuperAdmin       bool      `json:"is_super_admin" gorm:"default:false"`
 	EmailVerifyToken   string    `json:"-" gorm:"type:varchar(64)"`
 	PasswordResetToken string    `json:"-" gorm:"type:varchar(64)"`
 	PasswordResetExp   time.Time `json:"-"`

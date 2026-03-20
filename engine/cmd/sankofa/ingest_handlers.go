@@ -192,6 +192,7 @@ func resolveProjectForAPIKey(db *gorm.DB, apiKey string, origin string, clientIP
 	} else if err := db.Where("test_api_key = ?", apiKey).First(&project).Error; err == nil {
 		environment = "test"
 	} else {
+		log.Printf("⚠️  Invalid API Key attempt: %s (IP: %s)", apiKey, clientIP)
 		return database.Project{}, "", fiber.NewError(fiber.StatusForbidden, "Invalid API Key")
 	}
 

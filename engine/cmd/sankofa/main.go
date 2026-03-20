@@ -250,6 +250,11 @@ func main() {
 				fireDiscordAlert(DISCORD_WEBHOOK, msg)
 			}
 
+			// Capture all non-OK responses in our secure logs (Silencing socket.io noise)
+			if code >= 400 && !strings.Contains(c.Path(), "socket.io") {
+				log.Printf("⚠️  API ERROR [%d]: %s %s - %v", code, c.Method(), c.Path(), err)
+			}
+
 			return c.Status(code).JSON(fiber.Map{
 				"ok":    false,
 				"error": err.Error(),
@@ -706,6 +711,7 @@ func seedDefaultSuperAdmin(db *gorm.DB) {
 		Email:        ADMIN_EMAIL,
 		PasswordHash: string(hash),
 		FullName:     "Super Admin",
+		IsSuperAdmin: true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

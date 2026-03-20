@@ -276,7 +276,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	}
 
 	// 8. Generate Token
-	token, err := generateJWT(user.ID, user.Email)
+	token, err := generateJWT(user.ID, user.Email, user.IsSuperAdmin)
 	if err != nil {
 		// Note: User is created but token failed. Client can login.
 		log.Println("JWT Generation failed:", err)
@@ -317,7 +317,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	}
 
 	// Generate Token
-	token, err := generateJWT(user.ID, user.Email)
+	token, err := generateJWT(user.ID, user.Email, user.IsSuperAdmin)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
@@ -326,6 +326,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		"status":          "ok",
 		"token":           token,
 		"last_project_id": user.CurrentProjectID,
+		"user":            user,
 	})
 }
 
@@ -405,11 +406,12 @@ func SetJWTSecret(secret string) {
 	}
 }
 
-func generateJWT(userID string, email string) (string, error) {
+func generateJWT(userID string, email string, isSuperAdmin bool) (string, error) {
 	claims := jwt.MapClaims{
-		"user_id": userID,
-		"email":   email,
-		"exp":     time.Now().Add(time.Hour * 24 * 14).Unix(), // 14 days
+		"user_id":        userID,
+		"email":          email,
+		"is_super_admin": isSuperAdmin,
+		"exp":            time.Now().Add(time.Hour * 24 * 14).Unix(), // 14 days
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)

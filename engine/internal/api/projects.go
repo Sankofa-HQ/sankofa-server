@@ -116,14 +116,57 @@ func (h *ProjectHandler) GetProjects(c *fiber.Ctx) error {
 	// Enrich with Usage Stats from ClickHouse
 	type ProjectWithStats struct {
 		database.Project
-		EventCount       uint64 `json:"event_count"`
-		UserProfileCount uint64 `json:"user_profile_count"`
+		EventCount           uint64 `json:"event_count"`
+		UserProfileCount      uint64 `json:"user_profile_count"`
+		EffectiveEventLimit  int64  `json:"effective_event_limit"`
+		EffectiveReplayLimit int64  `json:"effective_replay_limit"`
 	}
 
 	var enriched []ProjectWithStats
 
+	// Fetch Subscription for effective limits
+	type SubInfo struct {
+		PlanTier          string `gorm:"column:plan_tier"`
+		CustomEventLimit  *int64 `gorm:"column:custom_event_limit"`
+		CustomReplayLimit *int64 `gorm:"column:custom_replay_limit"`
+	}
+	var sub SubInfo
+	h.DB.Table("subscriptions").Where("organization_id = ?", orgID).First(&sub)
+	if sub.PlanTier == "" {
+		sub.PlanTier = "hobby"
+	}
+
+	// Calculate base limits based on tier (Open-Core fallback)
+	baseEventLimit := int64(100_000)
+	baseReplayLimit := int64(1_000)
+	switch sub.PlanTier {
+	case "pro":
+		baseEventLimit = 1_000_000
+		baseReplayLimit = 5_000
+	case "growth":
+		baseEventLimit = 10_000_000
+		baseReplayLimit = 20_000
+	case "enterprise":
+		baseEventLimit = -1
+		baseReplayLimit = -1
+	}
+
+	effectiveEvtLimit := baseEventLimit
+	if sub.CustomEventLimit != nil {
+		effectiveEvtLimit = *sub.CustomEventLimit
+	}
+	effectiveRplLimit := baseReplayLimit
+	if sub.CustomReplayLimit != nil {
+		effectiveRplLimit = *sub.CustomReplayLimit
+	}
+
 	for _, p := range projects {
-		stats := ProjectWithStats{Project: p}
+		stats := ProjectWithStats{
+			Project:              p,
+			EffectiveEventLimit:  effectiveEvtLimit,
+			EffectiveReplayLimit: effectiveRplLimit,
+		}
+
 
 		if h.CH != nil {
 			// Count Events
@@ -291,13 +334,56 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update project"})
 	}
 
-	// Enrich with stats
+	// Enrich with stats & effective limits
 	type ProjectWithStats struct {
 		database.Project
-		EventCount       uint64 `json:"event_count"`
-		UserProfileCount uint64 `json:"user_profile_count"`
+		EventCount           uint64 `json:"event_count"`
+		UserProfileCount      uint64 `json:"user_profile_count"`
+		EffectiveEventLimit  int64  `json:"effective_event_limit"`
+		EffectiveReplayLimit int64  `json:"effective_replay_limit"`
 	}
-	stats := ProjectWithStats{Project: project}
+
+	// Fetch Subscription for effective limits
+	type SubInfo struct {
+		PlanTier          string `gorm:"column:plan_tier"`
+		CustomEventLimit  *int64 `gorm:"column:custom_event_limit"`
+		CustomReplayLimit *int64 `gorm:"column:custom_replay_limit"`
+	}
+	var sub SubInfo
+	h.DB.Table("subscriptions").Where("organization_id = ?", project.OrganizationID).First(&sub)
+	if sub.PlanTier == "" {
+		sub.PlanTier = "hobby"
+	}
+
+	// Calculate base limits (matches GetProjects fallback)
+	baseEventLimit := int64(100_000)
+	baseReplayLimit := int64(1_000)
+	switch sub.PlanTier {
+	case "pro":
+		baseEventLimit = 1_000_000
+		baseReplayLimit = 5_000
+	case "growth":
+		baseEventLimit = 10_000_000
+		baseReplayLimit = 20_000
+	case "enterprise":
+		baseEventLimit = -1
+		baseReplayLimit = -1
+	}
+
+	effectiveEvtLimit := baseEventLimit
+	if sub.CustomEventLimit != nil {
+		effectiveEvtLimit = *sub.CustomEventLimit
+	}
+	effectiveRplLimit := baseReplayLimit
+	if sub.CustomReplayLimit != nil {
+		effectiveRplLimit = *sub.CustomReplayLimit
+	}
+
+	stats := ProjectWithStats{
+		Project:              project,
+		EffectiveEventLimit:  effectiveEvtLimit,
+		EffectiveReplayLimit: effectiveRplLimit,
+	}
 
 	if h.CH != nil {
 		tenantID := project.ID
@@ -316,6 +402,7 @@ func (h *ProjectHandler) UpdateProject(c *fiber.Ctx) error {
 			stats.UserProfileCount = userCount
 		}
 	}
+
 
 	return c.JSON(stats)
 }
