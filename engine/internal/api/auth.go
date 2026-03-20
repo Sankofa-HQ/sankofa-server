@@ -336,6 +336,8 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
+	log.Printf("👤  ME: Fetching data for userID: %s", userID)
+
 	var user database.User
 	if err := h.DB.Preload("CurrentProject").First(&user, "id = ?", userID).Error; err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": "User not found"})

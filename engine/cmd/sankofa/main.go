@@ -167,6 +167,7 @@ func main() {
 
 	// 4. INIT AUTH SECRET
 	api.SetJWTSecret(API_SECRET)
+	InitializeEE(API_SECRET)
 
 	// MIGRATIONS
 	if err := db.AutoMigrate(
