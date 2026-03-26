@@ -241,26 +241,26 @@ func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, env
 	event.Timestamp = time.Now()
 
 	if event.Properties == nil {
-		event.Properties = make(map[string]string)
+		event.Properties = make(map[string]any)
 	}
 	if event.DefaultProperties == nil {
-		event.DefaultProperties = make(map[string]string)
+		event.DefaultProperties = make(map[string]any)
 	}
 
 	enrichWithGeoIP(clientIP, event.DefaultProperties)
 	enrichWithUserAgent(userAgent, event)
 
-	if sessionID, ok := event.Properties["$session_id"]; ok {
+	if sessionID, ok := event.Properties["$session_id"].(string); ok {
 		event.SessionID = sessionID
 	}
 
-	if city, ok := event.DefaultProperties["$city"]; ok {
+	if city, ok := event.DefaultProperties["$city"].(string); ok {
 		event.City = city
 	}
-	if region, ok := event.DefaultProperties["$region"]; ok {
+	if region, ok := event.DefaultProperties["$region"].(string); ok {
 		event.Region = region
 	}
-	if country, ok := event.DefaultProperties["$country"]; ok {
+	if country, ok := event.DefaultProperties["$country"].(string); ok {
 		event.Country = country
 	}
 	// Note: OS, Browser, DeviceModel are set by enrichWithUserAgent
@@ -281,7 +281,7 @@ func finalizePersonProfile(profile *PersonProfile, project database.Project, env
 	profile.Timestamp = time.Now()
 
 	if profile.Properties == nil {
-		profile.Properties = make(map[string]string)
+		profile.Properties = make(map[string]any)
 	}
 
 	enrichWithGeoIP(clientIP, profile.Properties)
@@ -322,7 +322,7 @@ func enrichWithUserAgent(userAgent string, event *AnalyticsEvent) {
 	}
 }
 
-func enrichWithGeoIP(clientIP string, properties map[string]string) {
+func enrichWithGeoIP(clientIP string, properties map[string]any) {
 	location := utils.LookupIP(clientIP)
 	if location == nil {
 		return

@@ -114,8 +114,8 @@ type AnalyticsEvent struct {
 	OS                string            `json:"-"`
 	Browser           string            `json:"-"`
 	DeviceModel       string            `json:"-"`
-	Properties        map[string]string `json:"properties"`
-	DefaultProperties map[string]string `json:"default_properties"`
+	Properties        map[string]any    `json:"properties"`
+	DefaultProperties map[string]any    `json:"default_properties"`
 	LibVersion        string            `json:"lib_version"`
 	TenantID          string            `json:"-"`
 	ProjectID         string            `json:"-"` // Explicit Project ID
@@ -126,7 +126,7 @@ type AnalyticsEvent struct {
 
 type PersonProfile struct {
 	DistinctID     string            `json:"distinct_id"`
-	Properties     map[string]string `json:"properties"`
+	Properties     map[string]any    `json:"properties"`
 	TenantID       string            `json:"-"`
 	ProjectID      string            `json:"-"`
 	OrganizationID string            `json:"-"`
@@ -515,8 +515,9 @@ func startEventWorker(ctx context.Context, conn driver.Conn, stream <-chan Analy
 func startPersonWorker(ctx context.Context, conn driver.Conn, stream <-chan PersonProfile) {
 	for p := range stream {
 		ctx := context.Background()
+		strProps := stringifyMap(p.Properties)
 		err := conn.Exec(ctx, "INSERT INTO persons (tenant_id, project_id, organization_id, environment, distinct_id, properties, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			p.TenantID, p.ProjectID, p.OrganizationID, p.Environment, p.DistinctID, p.Properties, p.Timestamp)
+			p.TenantID, p.ProjectID, p.OrganizationID, p.Environment, p.DistinctID, strProps, p.Timestamp)
 		if err != nil {
 			log.Println("❌ Person Write Error:", err)
 		}
@@ -543,11 +544,15 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 	}
 	for _, e := range events {
 		if e.Properties == nil {
-			e.Properties = make(map[string]string)
+			e.Properties = make(map[string]any)
 		}
 		if e.DefaultProperties == nil {
-			e.DefaultProperties = make(map[string]string)
+			e.DefaultProperties = make(map[string]any)
 		}
+		
+		strProps := stringifyMap(e.Properties)
+		strDefaultProps := stringifyMap(e.DefaultProperties)
+		
 		batch.Append(
 			e.ID,
 			e.TenantID,
@@ -564,8 +569,8 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 			e.OS,
 			e.Browser,
 			e.DeviceModel,
-			e.Properties,
-			e.DefaultProperties,
+			strProps,
+			strDefaultProps,
 			e.LibVersion,
 		)
 	}
@@ -574,6 +579,28 @@ func writeEventBatch(conn driver.Conn, events []AnalyticsEvent) {
 	} else {
 		fmt.Printf("💾 Flushed %d events\n", len(events))
 	}
+}
+
+func stringifyMap(input map[string]any) map[string]string {
+	result := make(map[string]string)
+	for key, value := range input {
+		if value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			result[key] = v
+		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			result[key] = fmt.Sprintf("%v", v)
+		default:
+			if b, err := json.Marshal(v); err == nil {
+				result[key] = string(b)
+			} else {
+				result[key] = fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	return result
 }
 
 func connectClickHouse() (driver.Conn, error) {
