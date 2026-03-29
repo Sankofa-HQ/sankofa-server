@@ -207,10 +207,13 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		whereClause += " AND event_name NOT LIKE '$%'"
 	}
 
-	// Filter out hidden events based on Lexicon
+	// Filter out hidden/rejected events based on Lexicon, but NEVER exclude
+	// events that are hidden solely because they were merged into a virtual event.
+	// Those merged children must still appear (they'll be renamed by ApplyVirtualEventNames).
 	var hiddenEventNames []string
 	h.DB.Model(&database.LexiconEvent{}).
 		Where("project_id = ? AND environment = ? AND (status IN ? OR hidden = ?)", project.ID, environment, []string{"rejected", "hidden"}, true).
+		Where("merged_into_id IS NULL OR merged_into_id = ''").
 		Pluck("name", &hiddenEventNames)
 
 	// Determine requested events from eventQueries or legacy query params

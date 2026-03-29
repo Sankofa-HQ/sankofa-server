@@ -136,7 +136,7 @@ func ExpandVirtualEventNames(db *gorm.DB, projectID string, environment string, 
 }
 
 // ApplyVirtualEventNames checks a list of raw events. If any event is merged into a Virtual Event,
-// it replaces the event's EventName with the Virtual Event's name so the UI displays the merged identity.
+// it replaces the event's EventName with the Virtual Event's DisplayName so the UI shows the merged identity.
 func ApplyVirtualEventNames(db *gorm.DB, projectID string, environment string, events []Event) {
 	if len(events) == 0 {
 		return
@@ -153,7 +153,7 @@ func ApplyVirtualEventNames(db *gorm.DB, projectID string, environment string, e
 	}
 
 	var children []database.LexiconEvent
-	db.Where("project_id = ? AND environment = ? AND name IN ? AND merged_into_id IS NOT NULL", projectID, environment, rawNames).Find(&children)
+	db.Where("project_id = ? AND environment = ? AND name IN ?", projectID, environment, rawNames).Find(&children)
 
 	if len(children) == 0 {
 		return
@@ -161,7 +161,7 @@ func ApplyVirtualEventNames(db *gorm.DB, projectID string, environment string, e
 
 	var parentIDs []string
 	for _, c := range children {
-		if c.MergedIntoID != nil {
+		if c.MergedIntoID != nil && *c.MergedIntoID != "" {
 			parentIDs = append(parentIDs, *c.MergedIntoID)
 		}
 	}
@@ -173,16 +173,21 @@ func ApplyVirtualEventNames(db *gorm.DB, projectID string, environment string, e
 	var parents []database.LexiconEvent
 	db.Where("project_id = ? AND environment = ? AND id IN ?", projectID, environment, parentIDs).Find(&parents)
 
-	parentNameMap := make(map[string]string)
+	// Map parent ID → DisplayName (fall back to Name if DisplayName is empty)
+	parentDisplayMap := make(map[string]string)
 	for _, p := range parents {
-		parentNameMap[p.ID] = p.Name
+		if p.DisplayName != "" {
+			parentDisplayMap[p.ID] = p.DisplayName
+		} else {
+			parentDisplayMap[p.ID] = p.Name
+		}
 	}
 
 	rawToVirtual := make(map[string]string)
 	for _, c := range children {
 		if c.MergedIntoID != nil {
-			if parentName, ok := parentNameMap[*c.MergedIntoID]; ok {
-				rawToVirtual[c.Name] = parentName
+			if displayName, ok := parentDisplayMap[*c.MergedIntoID]; ok {
+				rawToVirtual[c.Name] = displayName
 			}
 		}
 	}
@@ -193,3 +198,4 @@ func ApplyVirtualEventNames(db *gorm.DB, projectID string, environment string, e
 		}
 	}
 }
+
