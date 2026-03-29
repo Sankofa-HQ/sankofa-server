@@ -10,9 +10,9 @@ import (
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/utils"
 
-	"github.com/ua-parser/uap-go/uaparser"
 	"github.com/gofiber/fiber/v2"
 	gonanoid "github.com/matoous/go-nanoid/v2"
+	"github.com/ua-parser/uap-go/uaparser"
 	"gorm.io/gorm"
 )
 
