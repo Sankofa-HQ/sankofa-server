@@ -134,3 +134,62 @@ func ExpandVirtualEventNames(db *gorm.DB, projectID string, environment string, 
 
 	return expandedNames
 }
+
+// ApplyVirtualEventNames checks a list of raw events. If any event is merged into a Virtual Event,
+// it replaces the event's EventName with the Virtual Event's name so the UI displays the merged identity.
+func ApplyVirtualEventNames(db *gorm.DB, projectID string, environment string, events []Event) {
+	if len(events) == 0 {
+		return
+	}
+
+	rawNameSet := make(map[string]bool)
+	for _, e := range events {
+		rawNameSet[e.EventName] = true
+	}
+
+	var rawNames []string
+	for n := range rawNameSet {
+		rawNames = append(rawNames, n)
+	}
+
+	var children []database.LexiconEvent
+	db.Where("project_id = ? AND environment = ? AND name IN ? AND merged_into_id IS NOT NULL", projectID, environment, rawNames).Find(&children)
+
+	if len(children) == 0 {
+		return
+	}
+
+	var parentIDs []string
+	for _, c := range children {
+		if c.MergedIntoID != nil {
+			parentIDs = append(parentIDs, *c.MergedIntoID)
+		}
+	}
+
+	if len(parentIDs) == 0 {
+		return
+	}
+
+	var parents []database.LexiconEvent
+	db.Where("project_id = ? AND environment = ? AND id IN ?", projectID, environment, parentIDs).Find(&parents)
+
+	parentNameMap := make(map[string]string)
+	for _, p := range parents {
+		parentNameMap[p.ID] = p.Name
+	}
+
+	rawToVirtual := make(map[string]string)
+	for _, c := range children {
+		if c.MergedIntoID != nil {
+			if parentName, ok := parentNameMap[*c.MergedIntoID]; ok {
+				rawToVirtual[c.Name] = parentName
+			}
+		}
+	}
+
+	for i := range events {
+		if virtualName, ok := rawToVirtual[events[i].EventName]; ok {
+			events[i].EventName = virtualName
+		}
+	}
+}

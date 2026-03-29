@@ -751,6 +751,9 @@ func (h *EventsHandler) ListEvents(c *fiber.Ctx) error {
 		}
 	}
 
+	// Apply Lexicon Virtual Event Merging (so merged events show up as their Parent's name)
+	ApplyVirtualEventNames(h.DB, projID, environment, events)
+
 	return c.JSON(fiber.Map{
 		"events": events,
 		"total":  totalCount,
