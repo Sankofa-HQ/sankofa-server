@@ -44,6 +44,14 @@ func newTrackIngestHandler(db *gorm.DB, eventStream chan<- AnalyticsEvent) fiber
 		}
 
 		finalizeAnalyticsEvent(&event, project, environment, normalizedClientIP(c.IP()), c.Get("User-Agent"))
+
+		// ⚡️ BATTERY PROTECTION: If we still don't have a DistinctID, 
+		// we return 202 Accepted. This stops the SDK from retrying broken data.
+		if isGarbageID(event.DistinctID) || event.DistinctID == "" {
+			log.Printf("⚠️  Discarding unidentifiable event (Project: %s). Missing DistinctID.", project.ID)
+			return c.Status(202).JSON(fiber.Map{"ok": true, "status": "discarded"})
+		}
+
 		if err := enqueueAnalyticsEvent(eventStream, event); err != nil {
 			return err
 		}
@@ -65,6 +73,13 @@ func newPeopleIngestHandler(db *gorm.DB, personStream chan<- PersonProfile) fibe
 		}
 
 		finalizePersonProfile(&person, project, environment, normalizedClientIP(c.IP()), c.Get("User-Agent"))
+
+		// ⚡️ BATTERY PROTECTION
+		if isGarbageID(person.DistinctID) || person.DistinctID == "" {
+			log.Printf("⚠️  Discarding unidentifiable person (Project: %s). Missing DistinctID.", project.ID)
+			return c.Status(202).JSON(fiber.Map{"ok": true, "status": "discarded"})
+		}
+
 		if err := enqueuePersonProfile(personStream, person); err != nil {
 			return err
 		}
@@ -86,6 +101,13 @@ func newAliasIngestHandler(db *gorm.DB, aliasStream chan<- PersonAlias) fiber.Ha
 		}
 
 		finalizePersonAlias(&alias, project, environment)
+
+		// ⚡️ BATTERY PROTECTION
+		if isGarbageID(alias.DistinctID) || alias.DistinctID == "" {
+			log.Printf("⚠️  Discarding unidentifiable alias (Project: %s). Missing DistinctID.", project.ID)
+			return c.Status(202).JSON(fiber.Map{"ok": true, "status": "discarded"})
+		}
+
 		if err := enqueuePersonAlias(aliasStream, alias); err != nil {
 			return err
 		}
@@ -128,6 +150,7 @@ func newBatchIngestHandler(
 					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid track payload"})
 				}
 				finalizeAnalyticsEvent(&event, project, environment, clientIP, c.Get("User-Agent"))
+				if isGarbageID(event.DistinctID) || event.DistinctID == "" { continue }
 				events = append(events, event)
 			case "people":
 				var person PersonProfile
@@ -135,6 +158,7 @@ func newBatchIngestHandler(
 					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid people payload"})
 				}
 				finalizePersonProfile(&person, project, environment, clientIP, c.Get("User-Agent"))
+				if isGarbageID(person.DistinctID) || person.DistinctID == "" { continue }
 				people = append(people, person)
 			case "alias":
 				var alias PersonAlias
@@ -142,10 +166,17 @@ func newBatchIngestHandler(
 					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid alias payload"})
 				}
 				finalizePersonAlias(&alias, project, environment)
+				if isGarbageID(alias.DistinctID) || alias.DistinctID == "" { continue }
 				aliases = append(aliases, alias)
 			default:
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Unsupported operation type: %s", operation.Type)})
 			}
+		}
+
+		// ⚡️ BATTERY PROTECTION (Batch Level): If zero valid operations remain, 
+		// return 202 to stop retries if the entire batch was 'garbage'.
+		if len(events) == 0 && len(people) == 0 && len(aliases) == 0 && len(request.Operations) > 0 {
+			return c.Status(202).JSON(fiber.Map{"ok": true, "status": "discarded_all"})
 		}
 
 		for _, alias := range aliases {
@@ -238,7 +269,19 @@ func finalizeAnalyticsEvent(event *AnalyticsEvent, project database.Project, env
 	event.ProjectID = fmt.Sprint(project.ID)
 	event.OrganizationID = fmt.Sprint(project.OrganizationID)
 	event.Environment = environment
-	event.Timestamp = time.Now()
+	
+	// 🕒 PRESERVE CLIENT TIMESTAMP: If the SDK sent a timestamp, keep it. 
+	// Otherwise, default to server time.
+	if event.Timestamp.IsZero() {
+		// Fallback check in properties (common in Segment/PostHog styles)
+		if ts, ok := event.Properties["$timestamp"].(string); ok {
+			event.Timestamp = parseTimestamp(ts)
+		} else if ts, ok := event.Properties["$time"].(string); ok {
+			event.Timestamp = parseTimestamp(ts)
+		} else {
+			event.Timestamp = time.Now()
+		}
+	}
 
 	if event.Properties == nil {
 		event.Properties = make(map[string]any)
@@ -278,7 +321,10 @@ func finalizePersonProfile(profile *PersonProfile, project database.Project, env
 	profile.ProjectID = fmt.Sprint(project.ID)
 	profile.OrganizationID = fmt.Sprint(project.OrganizationID)
 	profile.Environment = environment
-	profile.Timestamp = time.Now()
+
+	if profile.Timestamp.IsZero() {
+		profile.Timestamp = time.Now()
+	}
 
 	if profile.Properties == nil {
 		profile.Properties = make(map[string]any)
@@ -298,7 +344,10 @@ func finalizePersonAlias(alias *PersonAlias, project database.Project, environme
 	alias.ProjectID = fmt.Sprint(project.ID)
 	alias.OrganizationID = fmt.Sprint(project.OrganizationID)
 	alias.Environment = environment
-	alias.Timestamp = time.Now()
+	
+	if alias.Timestamp.IsZero() {
+		alias.Timestamp = time.Now()
+	}
 }
 
 func enrichWithUserAgent(userAgent string, event *AnalyticsEvent) {
@@ -349,6 +398,18 @@ func normalizedClientIP(clientIP string) string {
 	return clientIP
 }
 
+func isGarbageID(s string) bool {
+	if s == "" || len(s) < 2 {
+		return true
+	}
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "gzip") ||
+		strings.Contains(lower, "*/*") ||
+		strings.Contains(lower, "deflate") ||
+		strings.Contains(lower, "identity") ||
+		strings.Contains(lower, "accept")
+}
+
 func enqueueAnalyticsEvent(eventStream chan<- AnalyticsEvent, event AnalyticsEvent) error {
 	select {
 	case eventStream <- event:
@@ -374,4 +435,23 @@ func enqueuePersonAlias(aliasStream chan<- PersonAlias, alias PersonAlias) error
 	default:
 		return fiber.NewError(fiber.StatusServiceUnavailable, "Buffer full")
 	}
+}
+
+// 🕒 Robust parser for client timestamps (ISO8601, RFC3339 with/without fractional seconds)
+func parseTimestamp(ts string) time.Time {
+	formats := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.999Z07:00",
+		"2006-01-02 15:04:05.999",
+		"2006-01-02 15:04:05",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, ts); err == nil {
+			return t
+		}
+	}
+
+	// Fallback for relative timestamps or bad formats 
+	return time.Now()
 }

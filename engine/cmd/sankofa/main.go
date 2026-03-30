@@ -121,7 +121,7 @@ type AnalyticsEvent struct {
 	ProjectID         string            `json:"-"` // Explicit Project ID
 	OrganizationID    string            `json:"-"` // Explicit Org ID
 	Environment       string            `json:"-"` // 'live' or 'test'
-	Timestamp         time.Time         `json:"-"`
+	Timestamp         time.Time         `json:"timestamp"`
 }
 
 type PersonProfile struct {
@@ -131,7 +131,7 @@ type PersonProfile struct {
 	ProjectID      string            `json:"-"`
 	OrganizationID string            `json:"-"`
 	Environment    string            `json:"-"`
-	Timestamp      time.Time         `json:"-"`
+	Timestamp      time.Time         `json:"timestamp"`
 }
 
 type PersonAlias struct {
@@ -141,7 +141,7 @@ type PersonAlias struct {
 	ProjectID      string    `json:"-"`
 	OrganizationID string    `json:"-"`
 	Environment    string    `json:"-"`
-	Timestamp      time.Time `json:"-"`
+	Timestamp      time.Time `json:"timestamp"`
 }
 
 func main() {
