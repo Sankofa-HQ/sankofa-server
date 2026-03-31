@@ -333,9 +333,15 @@ func finalizePersonProfile(profile *PersonProfile, project database.Project, env
 	enrichWithGeoIP(clientIP, profile.Properties)
 
 	if client := uaParser.Parse(userAgent); client != nil {
-		profile.Properties["$os"] = client.Os.Family
-		profile.Properties["$browser"] = client.UserAgent.Family
-		profile.Properties["$device_model"] = client.Device.Family
+		if val, _ := profile.Properties["$os"].(string); val == "" || val == "Other" {
+			profile.Properties["$os"] = client.Os.Family
+		}
+		if val, _ := profile.Properties["$browser"].(string); val == "" || val == "Other" {
+			profile.Properties["$browser"] = client.UserAgent.Family
+		}
+		if val, _ := profile.Properties["$device_model"].(string); val == "" || val == "Other" {
+			profile.Properties["$device_model"] = client.Device.Family
+		}
 	}
 }
 
@@ -356,17 +362,16 @@ func enrichWithUserAgent(userAgent string, event *AnalyticsEvent) {
 		return
 	}
 
-	event.OS = client.Os.Family
-	event.Browser = client.UserAgent.Family
-	event.DeviceModel = client.Device.Family
-
-	if event.OS != "" {
+	if event.OS == "" || event.OS == "Other" {
+		event.OS = client.Os.Family
 		event.DefaultProperties["$os"] = event.OS
 	}
-	if event.Browser != "" {
+	if event.Browser == "" || event.Browser == "Other" {
+		event.Browser = client.UserAgent.Family
 		event.DefaultProperties["$browser"] = event.Browser
 	}
-	if event.DeviceModel != "" {
+	if event.DeviceModel == "" || event.DeviceModel == "Other" {
+		event.DeviceModel = client.Device.Family
 		event.DefaultProperties["$device_model"] = event.DeviceModel
 	}
 }
