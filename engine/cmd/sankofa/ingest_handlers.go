@@ -81,12 +81,16 @@ func newTrackIngestHandler(db *gorm.DB, eventStream chan<- AnalyticsEvent) fiber
 }
 
 func resolveHeatmapCommands(event AnalyticsEvent) []SankofaCommand {
-	if heatmap.GlobalPlugin == nil || event.EventName != "$screen" {
+	if heatmap.GlobalPlugin == nil {
+		return nil
+	}
+	// iOS SDK sends "$screen_view"; web SDK sends "$screen". Accept both.
+	if event.EventName != "$screen" && event.EventName != "$screen_view" {
 		return nil
 	}
 
 	screen, _ := event.Properties["$screen_name"].(string)
-	if screen == "" {
+	if screen == "" || screen == "Unknown" {
 		return nil
 	}
 
