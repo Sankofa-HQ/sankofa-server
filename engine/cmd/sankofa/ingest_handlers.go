@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"sankofa/engine/ee/heatmap"
 	"sankofa/engine/internal/database"
 	"sankofa/engine/internal/utils"
 
@@ -15,6 +16,19 @@ import (
 	"github.com/ua-parser/uap-go/uaparser"
 	"gorm.io/gorm"
 )
+
+// 🎮 Command and Control (C2) Loop
+// Allows the server to request specific one-shot actions from the SDKs
+type SankofaCommand struct {
+	Type   string         `json:"type"`
+	Params map[string]any `json:"params"`
+}
+
+type SankofaResponse struct {
+	OK       bool             `json:"ok"`
+	Status   string           `json:"status,omitempty"`
+	Commands []SankofaCommand `json:"commands,omitempty"`
+}
 
 var uaParser *uaparser.Parser
 
@@ -56,8 +70,37 @@ func newTrackIngestHandler(db *gorm.DB, eventStream chan<- AnalyticsEvent) fiber
 			return err
 		}
 
-		return c.SendStatus(fiber.StatusOK)
+		// 🧪 Heatmap Self-Healing Hook
+		commands := resolveHeatmapCommands(event)
+
+		return c.JSON(SankofaResponse{
+			OK:       true,
+			Commands: commands,
+		})
 	}
+}
+
+func resolveHeatmapCommands(event AnalyticsEvent) []SankofaCommand {
+	if heatmap.GlobalPlugin == nil || event.EventName != "$screen" {
+		return nil
+	}
+
+	screen, _ := event.Properties["$screen_name"].(string)
+	if screen == "" {
+		return nil
+	}
+
+	if heatmap.GlobalPlugin.IsBackgroundNeeded(event.ProjectID, screen, event.LibVersion, event.OS) {
+		return []SankofaCommand{
+			{
+				Type: "CAPTURE_PRISTINE",
+				Params: map[string]any{
+					"screen": screen,
+				},
+			},
+		}
+	}
+	return nil
 }
 
 func newPeopleIngestHandler(db *gorm.DB, personStream chan<- PersonProfile) fiber.Handler {
@@ -197,6 +240,15 @@ func newBatchIngestHandler(
 			}
 		}
 
+		// 🧪 Batch Command Resolution (Simplified: take first screen command)
+		var commands []SankofaCommand
+		for _, e := range events {
+			if cmd := resolveHeatmapCommands(e); cmd != nil {
+				commands = append(commands, cmd...)
+				break // One command is enough for a batch
+			}
+		}
+
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
 			"ok":                  true,
 			"project_id":          project.ID,
@@ -206,6 +258,7 @@ func newBatchIngestHandler(
 			"events_received":     len(events),
 			"people_received":     len(people),
 			"aliases_received":    len(aliases),
+			"commands":            commands,
 		})
 	}
 }
