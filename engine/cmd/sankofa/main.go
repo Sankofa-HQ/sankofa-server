@@ -265,6 +265,13 @@ func main() {
 
 	// RECOVERY MIDDLEWARE: Catches panics and sends them to the ErrorHandler
 	app.Use(recover.New())
+
+	// GLOBAL REQUEST LOGGER
+	app.Use(func(c *fiber.Ctx) error {
+		log.Printf("🌐 [GLOBAL ROUTER] METHOD=%s PATH=%s IP=%s", c.Method(), c.Path(), c.IP())
+		return c.Next()
+	})
+
 	// Define CORS Middlewares
 	dashboardCORS := cors.New(cors.Config{
 		AllowOrigins:     CORS_ALLOWED_ORIGINS,
